@@ -92,6 +92,7 @@ const elements = {
     batchSize: document.getElementById('batchSize'),
     downloadBtn: document.getElementById('downloadBtn'),
     translatingOverlay: document.getElementById('translatingOverlay'),
+    textTranslatingOverlay: document.getElementById('textTranslatingOverlay'),
 
     // 历史记录
     historySection: document.getElementById('historySection'),
@@ -1401,6 +1402,9 @@ async function translateText() {
     
     elements.translateBtn.disabled = true;
     elements.translateBtn.textContent = '翻译中...';
+    if (elements.textTranslatingOverlay) {
+        elements.textTranslatingOverlay.style.display = 'flex';
+    }
     
     try {
         const response = await fetch('/api/translate/text', {
@@ -1415,7 +1419,10 @@ async function translateText() {
         const data = await response.json();
         
         if (data.success) {
-            elements.targetText.value = data.translation;
+            // 清理翻译结果中的 <think> 标签
+            let translation = data.translation || '';
+            translation = translation.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
+            elements.targetText.value = translation;
             
             // 显示翻译来源
             let sourceText = '';
@@ -1442,6 +1449,9 @@ async function translateText() {
     } finally {
         elements.translateBtn.disabled = false;
         elements.translateBtn.textContent = '翻译';
+        if (elements.textTranslatingOverlay) {
+            elements.textTranslatingOverlay.style.display = 'none';
+        }
     }
 }
 

@@ -50,6 +50,9 @@ backup_*.zip
 # IDE
 .vscode/
 .idea/
+
+# 第三方资源
+awesome-design-md-main/
 *.swp
 *.swo
 
