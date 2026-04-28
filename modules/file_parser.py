@@ -148,7 +148,8 @@ def _extract_para_format(para) -> Dict:
 
 def parse_excel_file(file_path: str) -> Tuple[List[Dict], Dict]:
     """
-    解析Excel文件
+    解析Excel文件（支持 .xlsx, .xlsm）
+    注意: .xls 格式不支持，请转换为 .xlsx
     
     Args:
         file_path: 文件路径
@@ -160,25 +161,49 @@ def parse_excel_file(file_path: str) -> Tuple[List[Dict], Dict]:
             - row: 行号 (0-based)
             - col: 列号 (0-based)
             - index: 在文档中的索引
+            - is_formula: 是否是公式
             - format: 格式信息
         format_info: 工作簿整体格式信息
     """
-    try:
-        from openpyxl import load_workbook
-    except ImportError:
-        raise ImportError("请安装 openpyxl: pip install openpyxl")
-    
     if not os.path.exists(file_path):
         raise FileNotFoundError(f"文件不存在: {file_path}")
     
+    ext = os.path.splitext(file_path)[1].lower()
+    
+    # 拒绝 .xls 格式
+    if ext == '.xls':
+        raise ValueError("不支持 .xls 格式，请先将文件另存为 .xlsx 格式后再上传")
+    
+    # 根据扩展名选择解析器
+    if ext in ['.xlsx', '.xlsm']:
+        return _parse_excel_openpyxl(file_path)
+    else:
+        raise ValueError(f"不支持的Excel格式: {ext}")
+
+
+def _parse_excel_openpyxl(file_path: str) -> Tuple[List[Dict], Dict]:
+    """使用 openpyxl 解析 .xlsx 和 .xlsm 文件"""
     try:
-        wb = load_workbook(file_path, data_only=True)
+        from openpyxl import load_workbook
+        from .special_parsers import parse_china_sheet
+    except ImportError:
+        raise ImportError("请安装 openpyxl: pip install openpyxl")
+    
+    try:
+        wb = load_workbook(file_path, data_only=False)  # data_only=False 以检测公式
     except Exception as e:
         raise ValueError(f"无法解析Excel文件: {e}")
     
+    # 检查是否有 "中国" sheet - 特殊结构处理
+    if "中国" in wb.sheetnames:
+        # 调用特殊解析器模块
+        return parse_china_sheet(file_path)
+    
+    # 标准解析逻辑
     texts = []
     index = 0
     total_cells = 0
+    formula_count = 0
     
     for sheet_name in wb.sheetnames:
         ws = wb[sheet_name]
@@ -186,6 +211,14 @@ def parse_excel_file(file_path: str) -> Tuple[List[Dict], Dict]:
         for row_idx, row in enumerate(ws.iter_rows()):
             for col_idx, cell in enumerate(row):
                 if cell.value is not None:
+                    # 检测是否是公式
+                    is_formula = cell.data_type == 'f' or (isinstance(cell.value, str) and cell.value.startswith('='))
+                    
+                    # 如果是公式，跳过不翻译
+                    if is_formula:
+                        formula_count += 1
+                        continue
+                    
                     cell_text = str(cell.value).strip()
                     if cell_text:
                         # 提取格式信息
@@ -197,6 +230,7 @@ def parse_excel_file(file_path: str) -> Tuple[List[Dict], Dict]:
                             "row": row_idx,
                             "col": col_idx,
                             "index": index,
+                            "is_formula": False,
                             "format": format_info
                         })
                         index += 1
@@ -205,6 +239,146 @@ def parse_excel_file(file_path: str) -> Tuple[List[Dict], Dict]:
     wb_info = {
         "sheet_count": len(wb.sheetnames),
         "sheet_names": wb.sheetnames,
+        "cell_count": total_cells,
+        "formula_count": formula_count
+    }
+    
+    return texts, wb_info
+
+
+def _parse_china_sheet(wb, file_path: str) -> Tuple[List[Dict], Dict]:
+    """
+    解析特殊结构的 "中国" sheet
+    只提取 "English" 列的内容（读取公式计算后的值），翻译后将结果填入 "Landessprache / Local Language" 列
+    """
+    from openpyxl import load_workbook
+    
+    # 使用 data_only=True 重新打开文件，获取公式计算后的值
+    try:
+        wb_data = load_workbook(file_path, data_only=True)
+        ws = wb_data["中国"]
+    except Exception as e:
+        raise ValueError(f"无法读取公式计算值: {e}")
+    
+    texts = []
+    index = 0
+    
+    # 找到标题行，确定 "English" 和 "Landessprache / Local Language" 列的位置
+    english_col = None
+    local_lang_col = None
+    header_row = 0
+    
+    # 遍历前5行查找标题
+    for row_idx in range(min(5, ws.max_row)):
+        row = list(ws.iter_rows(min_row=row_idx+1, max_row=row_idx+1))[0]
+        for col_idx, cell in enumerate(row):
+            if cell.value:
+                header_text = str(cell.value).strip()
+                if header_text == "English":
+                    english_col = col_idx
+                elif header_text == "Landessprache / Local Language":
+                    local_lang_col = col_idx
+        
+        # 如果找到了两个列，停止搜索
+        if english_col is not None and local_lang_col is not None:
+            header_row = row_idx
+            break
+    
+    # 如果找不到标题列，使用默认的 B 列和 C 列
+    if english_col is None:
+        english_col = 1  # B 列（索引从0开始，所以1是B列）
+        logger.warning(f'[ChinaSheet] 未找到 "English" 列，使用默认 B 列 (列索引: {english_col})')
+
+    if local_lang_col is None:
+        local_lang_col = 2  # C 列（索引从0开始，所以2是C列）
+        logger.warning(f'[ChinaSheet] 未找到 "Landessprache / Local Language" 列，使用默认 C 列 (列索引: {local_lang_col})')
+    
+    # 提取 "English" 列的数据（从标题行下一行开始）
+    # 读取公式计算后的值，而不是公式本身
+    for row_idx in range(header_row + 1, ws.max_row):
+        english_cell = ws.cell(row=row_idx + 1, column=english_col + 1)
+        
+        # 使用 data_only=True 读取的值已经是计算后的结果
+        if english_cell.value is not None:
+            cell_text = str(english_cell.value).strip()
+            if cell_text and cell_text != "English":  # 跳过标题本身
+                # 对于这种特殊表格，不需要保留格式信息
+                texts.append({
+                    "text": cell_text,
+                    "sheet": "中国",
+                    "row": row_idx,
+                    "col": local_lang_col,  # 目标列是 "Landessprache / Local Language"
+                    "source_col": english_col,  # 记录源列
+                    "index": index,
+                    "is_formula": False,  # 已经是计算后的值
+                    "format": {},  # 简化格式信息
+                    "is_china_sheet": True  # 标记为特殊结构
+                })
+                index += 1
+    
+    wb_info = {
+        "sheet_count": len(wb.sheetnames),
+        "sheet_names": wb.sheetnames,
+        "cell_count": len(texts),
+        "formula_count": 0,
+        "special_structure": "china_sheet",
+        "english_col": english_col,
+        "local_lang_col": local_lang_col,
+        "header_row": header_row
+    }
+    
+    return texts, wb_info
+
+
+def _parse_excel_xlrd(file_path: str) -> Tuple[List[Dict], Dict]:
+    """使用 xlrd 解析 .xls 文件"""
+    try:
+        import xlrd
+    except ImportError:
+        raise ImportError("请安装 xlrd: pip install xlrd")
+    
+    try:
+        wb = xlrd.open_workbook(file_path)
+    except Exception as e:
+        raise ValueError(f"无法解析Excel文件: {e}")
+    
+    texts = []
+    index = 0
+    total_cells = 0
+    
+    for sheet_idx in range(wb.nsheets):
+        ws = wb.sheet_by_index(sheet_idx)
+        sheet_name = ws.name
+        
+        for row_idx in range(ws.nrows):
+            for col_idx in range(ws.ncols):
+                cell = ws.cell(row_idx, col_idx)
+                
+                # xlrd: 0=empty, 1=text, 2=number, 3=date, 4=boolean, 5=error, 6=blank
+                if cell.ctype == xlrd.XL_CELL_EMPTY or cell.ctype == xlrd.XL_CELL_BLANK:
+                    continue
+                
+                # 跳过公式（xlrd 读取的是计算结果，但可以通过其他方式检测）
+                # xlrd 在读取 .xls 时，公式已经计算为值，无法直接检测
+                # 我们假设非空值都需要翻译
+                
+                cell_text = str(cell.value).strip()
+                if cell_text:
+                    texts.append({
+                        "text": cell_text,
+                        "sheet": sheet_name,
+                        "row": row_idx,
+                        "col": col_idx,
+                        "index": index,
+                        "is_formula": False,  # xlrd 无法直接检测公式
+                        "format": {}
+                    })
+                    index += 1
+                    total_cells += 1
+    
+    wb_info = {
+        "sheet_count": wb.nsheets,
+        "sheet_names": wb.sheet_names(),
         "cell_count": total_cells
     }
     
@@ -233,7 +407,10 @@ def _extract_cell_format(cell) -> Dict:
         })
     
     if cell.fill and cell.fill.fgColor:
-        format_info["fill_color"] = cell.fill.fgColor.rgb
+        # 将 RGB 对象转换为字符串
+        rgb_value = cell.fill.fgColor.rgb
+        if rgb_value is not None:
+            format_info["fill_color"] = str(rgb_value)
     
     if cell.alignment:
         format_info.update({
@@ -447,6 +624,98 @@ def parse_doc_file(file_path: str) -> Tuple[List[Dict], Dict]:
     )
 
 
+def parse_pptx_file(file_path: str) -> Tuple[List[Dict], Dict]:
+    """
+    解析PowerPoint文件 (.pptx)
+    
+    Args:
+        file_path: 文件路径
+        
+    Returns:
+        texts: 文本块列表，每个元素包含:
+            - text: 文本内容
+            - slide: 幻灯片编号 (0-based)
+            - shape_id: 形状ID
+            - shape_type: 形状类型
+            - index: 在文档中的索引
+        format_info: 演示文稿整体信息
+    """
+    try:
+        from pptx import Presentation
+    except ImportError:
+        raise ImportError("请安装 python-pptx: pip install python-pptx")
+    
+    if not os.path.exists(file_path):
+        raise FileNotFoundError(f"文件不存在: {file_path}")
+    
+    try:
+        prs = Presentation(file_path)
+    except Exception as e:
+        raise ValueError(f"无法解析PPT文件: {e}")
+    
+    texts = []
+    index = 0
+    total_shapes = 0
+    
+    for slide_idx, slide in enumerate(prs.slides):
+        for shape in slide.shapes:
+            # 检查形状是否有文本框
+            if hasattr(shape, "text") and shape.text.strip():
+                text = shape.text.strip()
+                if text:
+                    texts.append({
+                        "text": text,
+                        "slide": slide_idx,
+                        "shape_id": shape.shape_id,
+                        "shape_type": str(shape.shape_type),
+                        "index": index,
+                        "format": {
+                            "left": shape.left,
+                            "top": shape.top,
+                            "width": shape.width,
+                            "height": shape.height
+                        }
+                    })
+                    index += 1
+                    total_shapes += 1
+            
+            # 处理表格
+            if shape.has_table:
+                table = shape.table
+                for row_idx, row in enumerate(table.rows):
+                    for cell_idx, cell in enumerate(row.cells):
+                        if cell.text.strip():
+                            texts.append({
+                                "text": cell.text.strip(),
+                                "slide": slide_idx,
+                                "shape_id": shape.shape_id,
+                                "shape_type": "table_cell",
+                                "table_row": row_idx,
+                                "table_col": cell_idx,
+                                "index": index,
+                                "format": {}
+                            })
+                            index += 1
+                            total_shapes += 1
+    
+    ppt_info = {
+        "slide_count": len(prs.slides),
+        "text_block_count": len(texts),
+        "shape_count": total_shapes
+    }
+    
+    return texts, ppt_info
+
+
+def parse_ppt_file(file_path: str) -> Tuple[List[Dict], Dict]:
+    """
+    处理旧版 .ppt 文件 - 拒绝并提示用户转换
+    """
+    raise ValueError(
+        "不支持 .ppt 格式，请先将文件另存为 .pptx 格式后再上传"
+    )
+
+
 def parse_file(file_path: str) -> Tuple[List[Dict], Dict]:
     """
     自动识别文件类型并解析
@@ -467,6 +736,9 @@ def parse_file(file_path: str) -> Tuple[List[Dict], Dict]:
         ".docx": parse_word_file,
         ".doc": parse_doc_file,
         ".xlsx": parse_excel_file,
+        ".xlsm": parse_excel_file,
+        ".pptx": parse_pptx_file,
+        ".ppt": parse_ppt_file,
         ".pdf": parse_pdf_file,
         ".txt": parse_txt_file,
         ".csv": parse_csv_file
@@ -491,7 +763,12 @@ def get_file_type(file_path: str) -> str:
     ext = os.path.splitext(file_path)[1].lower()
     type_map = {
         ".docx": "word",
+        ".doc": "word",
         ".xlsx": "excel",
+        ".xls": "excel",
+        ".xlsm": "excel",
+        ".pptx": "ppt",
+        ".ppt": "ppt",
         ".pdf": "pdf",
         ".txt": "txt",
         ".csv": "csv"

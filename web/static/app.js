@@ -1,7 +1,13 @@
 /**
  * TransGuide Web 应用
  * 极简风格的翻译工具
+ * 前端版本: v1.1.0 - 支持 Excel/PPT
  */
+
+// 版本信息
+const APP_VERSION = 'v1.1.0';
+const FRONTEND_BUILD_TIME = new Date().toISOString();
+console.log(`[版本信息] 前端版本: ${APP_VERSION}, 构建时间: ${FRONTEND_BUILD_TIME}`);
 
 // 常量定义
 const UPLOAD_DIR = 'uploads';
@@ -19,7 +25,12 @@ const state = {
     translations: {},
     // 用户认证状态
     user: JSON.parse(localStorage.getItem('user') || 'null'),
-    authToken: localStorage.getItem('authToken') || null
+    authToken: localStorage.getItem('authToken') || null,
+    // 历史记录状态
+    historyPage: 1,
+    historyLimit: 10,
+    historyTotal: 0,
+    historyData: []
 };
 
 // 获取请求头（包含用户认证）
@@ -78,8 +89,18 @@ const elements = {
     previewList: document.getElementById('previewList'),
     translateFileBtn: document.getElementById('translateFileBtn'),
     outputMode: document.getElementById('outputMode'),
+    batchSize: document.getElementById('batchSize'),
     downloadBtn: document.getElementById('downloadBtn'),
     translatingOverlay: document.getElementById('translatingOverlay'),
+
+    // 历史记录
+    historySection: document.getElementById('historySection'),
+    historyList: document.getElementById('historyList'),
+    refreshHistoryBtn: document.getElementById('refreshHistoryBtn'),
+    historyPagination: document.getElementById('historyPagination'),
+    historyPrevBtn: document.getElementById('historyPrevBtn'),
+    historyNextBtn: document.getElementById('historyNextBtn'),
+    paginationInfo: document.getElementById('paginationInfo'),
 
     // 用户认证
     loginBtn: document.getElementById('loginBtn'),
@@ -310,6 +331,52 @@ function bindFileTranslationEvents() {
     });
     
     elements.translateFileBtn?.addEventListener('click', translateFile);
+    elements.downloadBtn?.addEventListener('click', downloadTranslatedFile);
+
+    // 历史记录事件
+    elements.refreshHistoryBtn?.addEventListener('click', () => {
+        state.historyPage = 1;
+        loadTranslationHistory();
+    });
+    elements.historyPrevBtn?.addEventListener('click', () => {
+        if (state.historyPage > 1) {
+            state.historyPage--;
+            loadTranslationHistory();
+        }
+    });
+    elements.historyNextBtn?.addEventListener('click', () => {
+        if (state.historyPage * state.historyLimit < state.historyTotal) {
+            state.historyPage++;
+            loadTranslationHistory();
+        }
+    });
+
+    // 搜索框事件
+    const historySearchInput = document.getElementById('historySearchInput');
+    historySearchInput?.addEventListener('input', debounce(() => {
+        state.historyPage = 1;
+        loadTranslationHistory();
+    }, 500));
+
+    // 用户筛选事件（管理员）
+    const historyUserFilter = document.getElementById('historyUserFilter');
+    historyUserFilter?.addEventListener('change', () => {
+        state.historyPage = 1;
+        loadTranslationHistory();
+    });
+}
+
+// 防抖函数
+function debounce(func, wait) {
+    let timeout;
+    return function executedFunction(...args) {
+        const later = () => {
+            clearTimeout(timeout);
+            func(...args);
+        };
+        clearTimeout(timeout);
+        timeout = setTimeout(later, wait);
+    };
 }
 
 // ========================================
@@ -330,22 +397,25 @@ function updateThemeIcon() {
 
 function switchView(viewName) {
     state.currentView = viewName;
-    
+
     // 更新导航
     elements.navItems.forEach(item => {
         item.classList.toggle('active', item.dataset.view === viewName);
     });
-    
+
     // 更新视图
     elements.views.forEach(view => {
         view.classList.toggle('active', view.id === viewName + 'View');
     });
-    
+
     // 加载对应视图数据
     if (viewName === 'terms') {
         loadTerms();
     } else if (viewName === 'memory') {
         loadMemory();
+    } else if (viewName === 'history') {
+        // 切换到翻译历史视图时加载历史记录
+        loadTranslationHistory();
     }
 }
 
@@ -1148,7 +1218,11 @@ function renderMemory(memory) {
 
 async function loadMemoryStats() {
     try {
-        const response = await fetch('/api/stats');
+        const response = await fetch('/api/stats', {
+            headers: {
+                'X-User-ID': state.user.id
+            }
+        });
         const data = await response.json();
 
         if (data.success) {
@@ -1331,7 +1405,10 @@ async function translateText() {
     try {
         const response = await fetch('/api/translate/text', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: { 
+                'Content-Type': 'application/json',
+                'X-User-ID': state.user.id
+            },
             body: JSON.stringify({ text })
         });
         
@@ -1380,34 +1457,64 @@ function clearText() {
 // ========================================
 
 async function uploadTranslationFile(file) {
+    console.log('[前端调试] ========== 开始上传文件 ==========');
+    console.log('[前端调试] 文件名:', file.name);
+    console.log('[前端调试] 文件类型:', file.type);
+    console.log('[前端调试] 文件大小:', file.size);
+    
     const formData = new FormData();
     formData.append('file', file);
     
     showToast('正在解析文件...');
     
     try {
+        console.log('[前端调试] 发送请求到 /api/upload');
         const response = await fetch('/api/upload', {
             method: 'POST',
+            headers: {
+                'X-User-ID': state.user.id
+            },
             body: formData
         });
         
+        console.log('[前端调试] 响应状态:', response.status);
         const data = await response.json();
+        console.log('[前端调试] 响应数据:', data);
         
         if (data.success) {
-            state.uploadedFile = data.filename;
+            state.uploadedFile = data.filename;  // 存储用的文件名（带时间戳）
+            state.originalFilename = data.original_filename;  // 原始文件名
             state.fileBlocks = data.blocks;
             state.translations = {};
-            
-            renderFilePreview(data.filename, data.blocks);
+            state.indexMapping = data.index_mapping || {}; // 保存坐标映射
+            state.downloadUrl = null; // 重置下载URL
+            state.isChinaSheet = data.is_china_sheet || false; // 保存特殊结构标记
+
+            console.log('[前端调试] 存储文件名:', state.uploadedFile);
+            console.log('[前端调试] 原始文件名:', state.originalFilename);
+            console.log('[前端调试] 坐标映射:', state.indexMapping);
+            console.log('[前端调试] 是否中国表:', state.isChinaSheet);
+
+            renderFilePreview(data.original_filename, data.blocks);
             showToast(`成功解析 ${data.total} 个文本块`);
         } else {
+            console.error('[前端调试] 上传失败:', data.error);
             showToast('上传失败: ' + data.error);
         }
     } catch (error) {
-        console.error('上传失败:', error);
+        console.error('[前端调试] 上传异常:', error);
         showToast('上传失败，请检查网络连接');
     }
+    console.log('[前端调试] ========== 上传结束 ==========');
 }
+
+// 分页状态
+let previewPageState = {
+    currentPage: 1,
+    pageSize: 15,
+    totalBlocks: 0,
+    totalPages: 1
+};
 
 function renderFilePreview(filename, blocks) {
     elements.filePreview.style.display = 'block';
@@ -1417,30 +1524,142 @@ function renderFilePreview(filename, blocks) {
     if (elements.downloadBtn) {
         elements.downloadBtn.style.opacity = '0.5';
         elements.downloadBtn.style.pointerEvents = 'none';
-        elements.downloadBtn.href = '#';
+        state.downloadUrl = null;
     }
     
-    // 只显示前15个文本块
-    const displayBlocks = blocks.slice(0, 15);
-    const hasMore = blocks.length > 15;
+    // 保存所有块到状态
+    state.allFileBlocks = blocks;
     
-    elements.previewList.innerHTML = displayBlocks.map(block => `
+    // 初始化分页状态
+    previewPageState.totalBlocks = blocks.length;
+    previewPageState.totalPages = Math.ceil(blocks.length / previewPageState.pageSize);
+    previewPageState.currentPage = 1;
+    
+    // 渲染当前页
+    renderPreviewPage();
+}
+
+function renderPreviewPage() {
+    const blocks = state.allFileBlocks;
+    const startIdx = (previewPageState.currentPage - 1) * previewPageState.pageSize;
+    const endIdx = Math.min(startIdx + previewPageState.pageSize, blocks.length);
+    const displayBlocks = blocks.slice(startIdx, endIdx);
+
+    let html = displayBlocks.map(block => {
+        // 构建位置标签
+        let locationTag = '';
+        if (block.sheet !== undefined) {
+            // Excel 文件
+            locationTag = `<span class="location-tag excel-tag">${block.sheet} [${block.row + 1},${block.col + 1}]</span>`;
+        } else if (block.slide !== undefined) {
+            // PPT 文件
+            locationTag = `<span class="location-tag ppt-tag">幻灯片 ${block.slide + 1}</span>`;
+        }
+
+        // 检查是否已有翻译
+        const translation = state.translations[block.index];
+        const translationContent = translation
+            ? escapeHtml(translation)
+            : '<em>等待翻译...</em>';
+
+        return `
         <div class="preview-item" data-index="${block.index}">
             <span class="preview-index">${block.index + 1}</span>
-            <div class="preview-text">${escapeHtml(block.text)}</div>
+            <div class="preview-content">
+                ${locationTag}
+                <div class="preview-text">${escapeHtml(block.text)}</div>
+            </div>
             <div class="preview-translation" id="translation-${block.index}">
-                <em>等待翻译...</em>
+                ${translationContent}
             </div>
         </div>
-    `).join('');
+    `}).join('');
     
-    if (hasMore) {
-        elements.previewList.innerHTML += `
-            <div class="preview-item" style="justify-content: center; color: var(--text-tertiary);">
-                还有 ${blocks.length - 15} 个文本块...
-            </div>
-        `;
+    // 添加分页控件
+    if (previewPageState.totalPages > 1) {
+        html += renderPaginationControls();
     }
+    
+    elements.previewList.innerHTML = html;
+    
+    // 绑定分页按钮事件
+    bindPaginationEvents();
+}
+
+function renderPaginationControls() {
+    const { currentPage, totalPages, totalBlocks } = previewPageState;
+    
+    let controls = `
+        <div class="preview-pagination" style="display: flex; justify-content: center; align-items: center; gap: 8px; padding: 16px; border-top: 1px solid var(--border-color);">
+            <span style="color: var(--text-secondary); font-size: 13px; margin-right: 8px;">
+                共 ${totalBlocks} 个文本块，第 ${currentPage}/${totalPages} 页
+            </span>
+            <button class="btn btn-sm" id="previewFirstPage" ${currentPage === 1 ? 'disabled' : ''}>首页</button>
+            <button class="btn btn-sm" id="previewPrevPage" ${currentPage === 1 ? 'disabled' : ''}>上一页</button>
+            <input type="number" id="previewPageInput" value="${currentPage}" min="1" max="${totalPages}" 
+                   style="width: 60px; text-align: center; padding: 4px 8px; border: 1px solid var(--border-color); border-radius: 4px; background: var(--bg-primary); color: var(--text-primary);">
+            <button class="btn btn-sm" id="previewGoToPage">跳转</button>
+            <button class="btn btn-sm" id="previewNextPage" ${currentPage === totalPages ? 'disabled' : ''}>下一页</button>
+            <button class="btn btn-sm" id="previewLastPage" ${currentPage === totalPages ? 'disabled' : ''}>尾页</button>
+        </div>
+    `;
+    
+    return controls;
+}
+
+function bindPaginationEvents() {
+    const totalPages = previewPageState.totalPages;
+    
+    // 首页
+    document.getElementById('previewFirstPage')?.addEventListener('click', () => {
+        if (previewPageState.currentPage !== 1) {
+            previewPageState.currentPage = 1;
+            renderPreviewPage();
+        }
+    });
+    
+    // 上一页
+    document.getElementById('previewPrevPage')?.addEventListener('click', () => {
+        if (previewPageState.currentPage > 1) {
+            previewPageState.currentPage--;
+            renderPreviewPage();
+        }
+    });
+    
+    // 下一页
+    document.getElementById('previewNextPage')?.addEventListener('click', () => {
+        if (previewPageState.currentPage < totalPages) {
+            previewPageState.currentPage++;
+            renderPreviewPage();
+        }
+    });
+    
+    // 尾页
+    document.getElementById('previewLastPage')?.addEventListener('click', () => {
+        if (previewPageState.currentPage !== totalPages) {
+            previewPageState.currentPage = totalPages;
+            renderPreviewPage();
+        }
+    });
+    
+    // 跳转
+    document.getElementById('previewGoToPage')?.addEventListener('click', () => {
+        const input = document.getElementById('previewPageInput');
+        const page = parseInt(input.value);
+        if (page >= 1 && page <= totalPages) {
+            previewPageState.currentPage = page;
+            renderPreviewPage();
+        } else {
+            showToast(`请输入 1-${totalPages} 之间的页码`);
+        }
+    });
+    
+    // 回车跳转
+    document.getElementById('previewPageInput')?.addEventListener('keypress', (e) => {
+        if (e.key === 'Enter') {
+            document.getElementById('previewGoToPage')?.click();
+        }
+    });
 }
 
 // 创建批次分组
@@ -1471,6 +1690,44 @@ function createBatches(blocks, maxSize) {
     return batches;
 }
 
+// 下载翻译后的文件
+async function downloadTranslatedFile() {
+    if (!state.downloadUrl) {
+        showToast('没有可下载的文件');
+        return;
+    }
+
+    console.log('[下载] 开始下载文件:', state.downloadUrl);
+
+    try {
+        // 构建完整URL，添加user_id参数用于认证
+        let fullUrl = state.downloadUrl.startsWith('http')
+            ? state.downloadUrl
+            : window.location.origin + state.downloadUrl;
+
+        // 添加user_id参数
+        const separator = fullUrl.includes('?') ? '&' : '?';
+        fullUrl += `${separator}user_id=${state.user.id}`;
+
+        // 创建一个临时的iframe来下载（避免页面跳转）
+        const iframe = document.createElement('iframe');
+        iframe.style.display = 'none';
+        iframe.src = fullUrl;
+        document.body.appendChild(iframe);
+
+        // 3秒后移除iframe
+        setTimeout(() => {
+            document.body.removeChild(iframe);
+        }, 3000);
+
+        console.log('[下载] 下载已启动:', fullUrl);
+        showToast('文件下载中...');
+    } catch (error) {
+        console.error('[下载] 下载失败:', error);
+        showToast('下载失败: ' + error.message);
+    }
+}
+
 async function translateFile() {
     console.log('[LLM链路] ========== 开始文件翻译流程 ==========');
     console.log('[LLM链路] 文件块数量:', state.fileBlocks.length);
@@ -1490,32 +1747,52 @@ async function translateFile() {
     
     showToast('开始翻译文件...');
     
-    // 按字符数分批，每批最多 60000 字符（预留空间给提示词和响应）
-    const MAX_BATCH_SIZE = 60000;
-    const batches = createBatches(state.fileBlocks, MAX_BATCH_SIZE);
-    console.log('[LLM链路] 批次数量:', batches.length, '各批次大小:', batches.map(b => b.length));
+    // 按字符数分批，从用户设置读取批次大小
+    const USER_BATCH_SIZE = parseInt(elements.batchSize.value) || 60000;
+    let currentBatchSize = USER_BATCH_SIZE;
+    let hasAdjustedBatchSize = false; // 标记是否已调整过批次大小
+    console.log('[LLM链路] 批次大小设置:', USER_BATCH_SIZE, '字符/批');
+    
+    // 使用队列管理所有待处理的批次（包括断点续传产生的子批次）
+    let batches = createBatches(state.fileBlocks, currentBatchSize);
+    console.log('[LLM链路] 初始批次数量:', batches.length, '各批次大小:', batches.map(b => b.length));
     
     let completed = 0;
     const total = state.fileBlocks.length;
+    let batchIdx = 0;
     
-    for (let batchIdx = 0; batchIdx < batches.length; batchIdx++) {
+    while (batchIdx < batches.length) {
         const batch = batches[batchIdx];
-        console.log(`[LLM链路] --- 批次 ${batchIdx + 1}/${batches.length} ---`);
+        console.log(`[LLM链路] --- 批次 ${batchIdx + 1}/${batches.length} (块 ${completed}-${completed + batch.length - 1}) ---`);
         console.log('[LLM链路] 批次文本索引:', batch.map(b => b.index));
         
+        // 构建请求体，使用数字索引
+        const indexMapping = {}; // 用于映射数字索引到原始索引
+        const requestBody = { 
+            texts: batch.map((b, i) => {
+                const numericIndex = i; // 使用简单的数字索引
+                indexMapping[numericIndex] = b.index; // 保存映射关系
+                return { 
+                    index: numericIndex, 
+                    text: b.text 
+                };
+            }),
+            start_index: 0 // 新增：起始索引偏移
+        };
+        console.log('[LLM链路] 索引映射:', indexMapping);
+        console.log('[LLM链路] 请求体大小:', JSON.stringify(requestBody).length, '字符');
+        
+        showToast(`翻译批次 ${batchIdx + 1}/${batches.length}...`);
+        
         try {
-            showToast(`翻译批次 ${batchIdx + 1}/${batches.length}...`);
-            
-            const requestBody = { 
-                texts: batch.map(b => ({ index: b.index, text: b.text }))
-            };
-            console.log('[LLM链路] 请求体大小:', JSON.stringify(requestBody).length, '字符');
-            
             console.log('[LLM链路] 发送请求到 /api/translate/batch...');
             const startTime = performance.now();
             const response = await fetch('/api/translate/batch', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: { 
+                    'Content-Type': 'application/json',
+                    'X-User-ID': state.user.id
+                },
                 body: JSON.stringify(requestBody)
             });
             const endTime = performance.now();
@@ -1526,18 +1803,52 @@ async function translateFile() {
             console.log('[LLM链路] 响应 success:', data.success, '翻译数量:', data.translations ? data.translations.length : 0, '耗时:', duration.toFixed(2), '秒');
             
             if (data.success && data.translations) {
-                // 更新翻译结果
+                // 检查是否所有块都被翻译（截断检测）
+                const expectedCount = batch.length;
+                const actualCount = data.translations.length;
+                const completionRate = actualCount / expectedCount;
+                
+                console.log(`[LLM链路] 期望翻译 ${expectedCount} 个块，实际返回 ${actualCount} 个块，完成率 ${(completionRate * 100).toFixed(1)}%`);
+                
+                // 更新翻译结果，使用索引映射还原原始索引
                 for (const trans of data.translations) {
-                    state.translations[trans.index] = trans.translation;
-                    
-                    // 更新预览
-                    const transEl = document.getElementById(`translation-${trans.index}`);
-                    if (transEl) {
-                        transEl.textContent = trans.translation;
+                    const originalIndex = indexMapping[trans.index];
+                    if (originalIndex !== undefined) {
+                        state.translations[originalIndex] = trans.translation;
+                        
+                        // 更新预览
+                        const transEl = document.getElementById(`translation-${originalIndex}`);
+                        if (transEl) {
+                            transEl.textContent = trans.translation;
+                        }
                     }
                 }
-                completed += batch.length;
+                
+                // 功能1: 截断检测 - 如果完成率低于90%且未调整过批次大小，调整到80%
+                if (completionRate < 0.9 && !hasAdjustedBatchSize) {
+                    const newBatchSize = Math.floor(USER_BATCH_SIZE * 0.8);
+                    console.log(`[LLM链路] 检测到截断，批次大小从 ${currentBatchSize} 调整为 ${newBatchSize} (80%)`);
+                    showToast(`检测到截断，后续批次调整为 ${newBatchSize} 字符/批`);
+                    currentBatchSize = newBatchSize;
+                    hasAdjustedBatchSize = true;
+                }
+                
+                // 功能2: 断点续传 - 如果有未翻译的块，创建续传批次
+                if (actualCount < expectedCount) {
+                    const remainingBlocks = batch.slice(actualCount);
+                    console.log(`[LLM链路] 断点续传：${actualCount}/${expectedCount} 完成，剩余 ${remainingBlocks.length} 个块`);
+                    
+                    // 将剩余块作为新批次插入队列（下一个位置）
+                    if (remainingBlocks.length > 0) {
+                        batches.splice(batchIdx + 1, 0, remainingBlocks);
+                        console.log(`[LLM链路] 已将剩余 ${remainingBlocks.length} 个块插入队列`);
+                    }
+                }
+                
+                completed += actualCount;
                 console.log('[LLM链路] 批次完成，累计完成:', completed, '/', total);
+                batchIdx++; // 处理下一个批次
+                
             } else {
                 console.error('[LLM链路] 失败:', data.error);
                 // 检查是否是额度用尽的错误
@@ -1547,55 +1858,90 @@ async function translateFile() {
                     break;
                 } else {
                     showToast('翻译失败: ' + (data.error || '未知错误'));
+                    batchIdx++; // 跳过这个批次，继续下一个
                 }
             }
         } catch (error) {
             console.error(`[LLM链路] 批次 ${batchIdx + 1} 异常:`, error);
             showToast(`批次 ${batchIdx + 1} 翻译失败`);
+            batchIdx++; // 跳过这个批次，继续下一个
         }
     }
     
     console.log('[LLM链路] ========== 翻译流程结束，总翻译数:', Object.keys(state.translations).length, '==========');
     
     // 导出文件
+    console.log('[导出调试] ========== 开始导出文件 ==========');
+    console.log('[导出调试] 文件名:', state.uploadedFile);
+    console.log('[导出调试] 翻译条目数:', Object.keys(state.translations).length);
+    console.log('[导出调试] 坐标映射:', state.indexMapping);
+    console.log('[导出调试] 是否中国表:', state.isChinaSheet);
+    console.log('[导出调试] 下载按钮元素:', elements.downloadBtn);
+    
+    // 转换翻译结果为坐标映射格式（用于Excel/PPT）
+    const mappedTranslations = {};
+    for (const [key, value] of Object.entries(state.translations)) {
+        const numKey = parseInt(key);
+        if (state.indexMapping && state.indexMapping[numKey]) {
+            // 使用坐标映射
+            const coord = state.indexMapping[numKey];
+            mappedTranslations[`${coord[0]},${coord[1]},${coord[2]}`] = value;
+        } else {
+            // 使用原始索引
+            mappedTranslations[key] = value;
+        }
+    }
+    console.log('[导出调试] 映射后的翻译:', mappedTranslations);
+    
     try {
         const response = await fetch('/api/translate/file', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: {
+                'Content-Type': 'application/json',
+                'X-User-ID': state.user.id
+            },
             body: JSON.stringify({
-                filename: state.uploadedFile,
-                filepath: UPLOAD_DIR + '/' + state.uploadedFile,
-                translations: state.translations,
-                mode: elements.outputMode.value
+                filename: state.uploadedFile,  // 存储用的文件名（带时间戳）
+                original_filename: state.originalFilename,  // 原始文件名
+                translations: mappedTranslations,
+                mode: elements.outputMode.value,
+                is_china_sheet: state.isChinaSheet
             })
         });
         
         const data = await response.json();
+        console.log('[导出调试] 响应:', data);
         
         if (data.success) {
             showToast('翻译完成！');
             
             // 启用下载按钮
             if (elements.downloadBtn) {
+                console.log('[导出调试] 启用下载按钮, URL:', data.download_url);
+                state.downloadUrl = data.download_url; // 保存下载URL
                 elements.downloadBtn.style.opacity = '1';
                 elements.downloadBtn.style.pointerEvents = 'auto';
-                elements.downloadBtn.href = data.download_url;
-                elements.downloadBtn.download = state.uploadedFile.replace(/^\d{8}_\d{6}_/, '');
+                console.log('[导出调试] 下载按钮已启用');
+            } else {
+                console.error('[导出调试] 下载按钮元素不存在!');
             }
         } else {
+            console.error('[导出调试] 导出失败:', data.error);
             showToast('导出失败: ' + data.error);
         }
     } catch (error) {
-        console.error('导出失败:', error);
+        console.error('[导出调试] 导出异常:', error);
         showToast('导出失败，请重试');
-    } finally {
-        elements.translateFileBtn.disabled = false;
-        elements.translateFileBtn.textContent = '翻译文件';
-        
-        // 隐藏加载遮罩
-        if (elements.translatingOverlay) {
-            elements.translatingOverlay.style.display = 'none';
-        }
+    }
+    console.log('[导出调试] ========== 导出结束 ==========');
+    
+    // 恢复按钮状态
+    elements.translateFileBtn.disabled = false;
+    elements.translateFileBtn.textContent = '翻译文件';
+    
+    // 隐藏加载遮罩
+    if (elements.translatingOverlay) {
+        elements.translatingOverlay.style.display = 'none';
     }
 }
 
@@ -1991,6 +2337,212 @@ window.disableUser = async function(userId) {
         }
     } catch (error) {
         showToast('操作失败');
+    }
+};
+
+// ========================================
+// 翻译历史记录功能
+// ========================================
+
+async function loadTranslationHistory() {
+    if (!state.user) return;
+
+    try {
+        // 构建查询参数
+        const params = new URLSearchParams();
+        params.append('page', state.historyPage);
+        params.append('limit', state.historyLimit);
+
+        // 添加搜索关键词
+        const keyword = document.getElementById('historySearchInput')?.value?.trim();
+        if (keyword) {
+            params.append('keyword', keyword);
+        }
+
+        // 添加用户筛选（管理员）
+        const userFilter = document.getElementById('historyUserFilter')?.value;
+        if (userFilter) {
+            params.append('filter_username', userFilter);
+        }
+
+        const response = await fetch(
+            `/api/history?${params.toString()}`,
+            { headers: getAuthHeaders() }
+        );
+
+        const data = await response.json();
+
+        if (data.success) {
+            state.historyData = data.data.items;
+            state.historyTotal = data.data.total;
+            renderHistoryList(data.data);
+
+            // 如果是管理员，加载用户列表
+            if (state.user?.role === 'admin') {
+                loadUserFilterOptions(data.data.items);
+            }
+        } else {
+            console.error('加载历史记录失败:', data.error);
+        }
+    } catch (error) {
+        console.error('加载历史记录失败:', error);
+    }
+}
+
+// 加载用户筛选选项（管理员）
+function loadUserFilterOptions(items) {
+    const userFilter = document.getElementById('historyUserFilter');
+    if (!userFilter) return;
+
+    // 显示用户筛选下拉框
+    userFilter.style.display = 'inline-block';
+
+    // 提取唯一的用户名列表
+    const usernames = [...new Set(items.map(item => item.username))];
+
+    // 保存当前选中值
+    const currentValue = userFilter.value;
+
+    // 重建选项
+    userFilter.innerHTML = '<option value="">所有用户</option>';
+    usernames.forEach(username => {
+        const option = document.createElement('option');
+        option.value = username;
+        option.textContent = username;
+        userFilter.appendChild(option);
+    });
+
+    // 恢复选中值
+    userFilter.value = currentValue;
+}
+
+function renderHistoryList(data) {
+    const { items, total, page, limit } = data;
+
+    if (items.length === 0) {
+        elements.historyList.innerHTML = '<div class="history-empty">暂无翻译记录</div>';
+        elements.historyPagination.style.display = 'none';
+        return;
+    }
+
+    // 文件类型图标映射
+    const fileIcons = {
+        'docx': '📄',
+        'doc': '📄',
+        'xlsx': '📊',
+        'xls': '📊',
+        'xlsm': '📊',
+        'pptx': '📽️',
+        'pdf': '📕'
+    };
+
+    // 状态显示映射
+    const statusMap = {
+        'completed': { text: '已完成', class: 'completed' },
+        'processing': { text: '处理中', class: 'processing' },
+        'failed': { text: '失败', class: 'failed' }
+    };
+
+    elements.historyList.innerHTML = items.map(item => {
+        const icon = fileIcons[item.file_type] || '📄';
+        const status = statusMap[item.status] || { text: item.status, class: '' };
+        const fileSize = formatFileSize(item.file_size);
+        const date = new Date(item.created_at).toLocaleString('zh-CN');
+        const modeText = item.mode === 'bilingual' ? '双语' : '译文';
+
+        return `
+            <div class="history-item">
+                <div class="history-icon ${item.file_type}">${icon}</div>
+                <div class="history-content">
+                    <div class="history-filename">${escapeHtml(item.original_filename)}</div>
+                    <div class="history-summary">${escapeHtml(item.summary || '无摘要')}</div>
+                    <div class="history-meta">
+                        <span>👤 ${escapeHtml(item.username)}</span>
+                        <span>📅 ${date}</span>
+                        <span>📦 ${fileSize}</span>
+                        <span>📝 ${item.block_count || 0} 块</span>
+                        <span>🔤 ${modeText}</span>
+                    </div>
+                </div>
+                <div class="history-status ${status.class}">${status.text}</div>
+                <div class="history-actions">
+                    ${item.status === 'completed' ? `
+                        <button class="btn btn-primary" onclick="downloadHistoryFile('${item.output_filename}')">下载</button>
+                    ` : ''}
+                    <button class="btn btn-ghost" onclick="deleteHistoryRecord(${item.id})">删除</button>
+                </div>
+            </div>
+        `;
+    }).join('');
+
+    // 更新分页
+    if (total > limit) {
+        elements.historyPagination.style.display = 'flex';
+        elements.paginationInfo.textContent = `第 ${page} 页 / 共 ${Math.ceil(total / limit)} 页`;
+        elements.historyPrevBtn.disabled = page <= 1;
+        elements.historyNextBtn.disabled = page * limit >= total;
+    } else {
+        elements.historyPagination.style.display = 'none';
+    }
+}
+
+function formatFileSize(bytes) {
+    if (!bytes || bytes === 0) return '0 B';
+    const k = 1024;
+    const sizes = ['B', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+}
+
+window.downloadHistoryFile = async function(filename) {
+    try {
+        // 直接下载方式，避免blob URL警告
+        const downloadUrl = `/api/download/${encodeURIComponent(filename)}`;
+        let fullUrl = window.location.origin + downloadUrl;
+
+        // 添加user_id参数用于认证
+        fullUrl += `?user_id=${state.user.id}`;
+
+        // 创建隐藏的iframe来下载
+        const iframe = document.createElement('iframe');
+        iframe.style.display = 'none';
+        iframe.src = fullUrl;
+        document.body.appendChild(iframe);
+
+        // 3秒后移除iframe
+        setTimeout(() => {
+            if (iframe.parentNode) {
+                document.body.removeChild(iframe);
+            }
+        }, 3000);
+
+        showToast('开始下载');
+    } catch (error) {
+        console.error('下载失败:', error);
+        showToast('下载失败');
+    }
+};
+
+window.deleteHistoryRecord = async function(recordId) {
+    if (!confirm('确定要删除这条记录吗？文件也将被删除。')) return;
+
+    try {
+        const response = await fetch(`/api/history/${recordId}`, {
+            method: 'DELETE',
+            headers: getAuthHeaders()
+        });
+
+        const data = await response.json();
+
+        if (data.success) {
+            showToast('记录已删除');
+            loadTranslationHistory();
+        } else {
+            showToast(data.error || '删除失败');
+        }
+    } catch (error) {
+        console.error('删除失败:', error);
+        showToast('删除失败');
     }
 };
 

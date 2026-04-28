@@ -76,6 +76,45 @@ class UserDatabase:
             )
         """)
 
+        # 翻译历史记录表
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS translation_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                username TEXT NOT NULL,
+                original_filename TEXT NOT NULL,
+                output_filename TEXT NOT NULL,
+                file_type TEXT,
+                summary TEXT,
+                block_count INTEGER,
+                total_chars INTEGER,
+                mode TEXT,
+                source_lang TEXT DEFAULT 'en',
+                target_lang TEXT DEFAULT 'zh',
+                status TEXT DEFAULT 'processing',
+                error_message TEXT,
+                file_size INTEGER,
+                file_path TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                completed_at TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users(id)
+            )
+        """)
+
+        # 创建索引
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_history_user 
+            ON translation_history(user_id)
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_history_created 
+            ON translation_history(created_at)
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_history_status 
+            ON translation_history(status)
+        """)
+
         conn.commit()
 
         # 创建默认管理员账号（如果不存在）
@@ -458,6 +497,178 @@ class UserDatabase:
         conn.close()
 
         return dict(row) if row else None
+
+    # ==================== 翻译历史记录管理 ====================
+
+    def create_translation_record(self, user_id: int, username: str, original_filename: str,
+                                  output_filename: str, file_type: str, summary: str,
+                                  block_count: int, total_chars: int, mode: str,
+                                  file_path: str) -> int:
+        """
+        创建翻译历史记录
+        返回: 记录ID
+        """
+        conn = self._get_connection()
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            INSERT INTO translation_history 
+            (user_id, username, original_filename, output_filename, file_type,
+             summary, block_count, total_chars, mode, file_path, status)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (user_id, username, original_filename, output_filename, file_type,
+              summary, block_count, total_chars, mode, file_path, 'processing'))
+
+        record_id = cursor.lastrowid
+        conn.commit()
+        conn.close()
+
+        return record_id
+
+    def complete_translation_record(self, record_id: int, file_size: int,
+                                    error_message: str = None,
+                                    summary: str = None) -> bool:
+        """标记翻译记录为完成或失败，可选更新摘要"""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+
+        if error_message:
+            cursor.execute("""
+                UPDATE translation_history
+                SET status = 'failed', error_message = ?, completed_at = ?
+                WHERE id = ?
+            """, (error_message, datetime.now(), record_id))
+        else:
+            if summary:
+                # 更新摘要和完成状态
+                cursor.execute("""
+                    UPDATE translation_history
+                    SET status = 'completed', file_size = ?, completed_at = ?, summary = ?
+                    WHERE id = ?
+                """, (file_size, datetime.now(), summary, record_id))
+            else:
+                cursor.execute("""
+                    UPDATE translation_history
+                    SET status = 'completed', file_size = ?, completed_at = ?
+                    WHERE id = ?
+                """, (file_size, datetime.now(), record_id))
+
+        conn.commit()
+        conn.close()
+
+        return True
+
+    def get_translation_history(self, user_id: int = None, page: int = 1,
+                                limit: int = 20, status: str = None,
+                                keyword: str = None, username: str = None) -> Dict:
+        """
+        获取翻译历史列表，支持模糊搜索和用户筛选
+        返回: {'total': int, 'page': int, 'limit': int, 'items': List[Dict]}
+        """
+        conn = self._get_connection()
+        cursor = conn.cursor()
+
+        # 构建查询条件
+        conditions = []
+        params = []
+
+        if user_id:
+            conditions.append("user_id = ?")
+            params.append(user_id)
+
+        if status:
+            conditions.append("status = ?")
+            params.append(status)
+
+        if username:
+            conditions.append("username = ?")
+            params.append(username)
+
+        if keyword:
+            # 模糊搜索：文件名、摘要、用户名
+            conditions.append("(original_filename LIKE ? OR summary LIKE ? OR username LIKE ?)")
+            keyword_pattern = f"%{keyword}%"
+            params.extend([keyword_pattern, keyword_pattern, keyword_pattern])
+
+        where_clause = " WHERE " + " AND ".join(conditions) if conditions else ""
+
+        # 查询总数
+        cursor.execute(f"""
+            SELECT COUNT(*) FROM translation_history {where_clause}
+        """, params)
+        total = cursor.fetchone()[0]
+
+        # 查询列表
+        offset = (page - 1) * limit
+        cursor.execute(f"""
+            SELECT id, user_id, username, original_filename, output_filename,
+                   file_type, summary, block_count, total_chars, mode, status,
+                   file_size, created_at, completed_at
+            FROM translation_history
+            {where_clause}
+            ORDER BY created_at DESC
+            LIMIT ? OFFSET ?
+        """, params + [limit, offset])
+
+        rows = cursor.fetchall()
+        items = [dict(row) for row in rows]
+
+        conn.close()
+
+        return {
+            'total': total,
+            'page': page,
+            'limit': limit,
+            'items': items
+        }
+
+    def get_translation_record(self, record_id: int) -> Optional[Dict]:
+        """获取单条翻译记录详情"""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            SELECT * FROM translation_history WHERE id = ?
+        """, (record_id,))
+
+        row = cursor.fetchone()
+        conn.close()
+
+        return dict(row) if row else None
+
+    def delete_translation_record(self, record_id: int, user_id: int = None) -> bool:
+        """删除翻译记录（可选：只能删除自己的）"""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+
+        if user_id:
+            cursor.execute("""
+                DELETE FROM translation_history WHERE id = ? AND user_id = ?
+            """, (record_id, user_id))
+        else:
+            cursor.execute("""
+                DELETE FROM translation_history WHERE id = ?
+            """, (record_id,))
+
+        conn.commit()
+        conn.close()
+
+        return True
+
+    def get_user_today_file_count(self, user_id: int, date_str: str) -> int:
+        """获取用户当天翻译文件数量"""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            SELECT COUNT(*) FROM translation_history
+            WHERE user_id = ? AND date(created_at) = date(?)
+        """, (user_id, date_str))
+
+        count = cursor.fetchone()[0]
+        conn.close()
+
+        return count
 
 
 # 全局实例
