@@ -1,0 +1,19 @@
+# 文件解析
+python-docx>=0.8.11
+openpyxl>=3.0.10
+PyMuPDF>=1.23.0
+
+# 向量编码与检索
+sentence-transformers>=2.2.0
+chromadb>=0.4.0
+
+# LLM调用
+llama-cpp-python>=0.2.0
+openai>=1.0.0
+
+# Web界面
+Flask>=2.3.0
+Werkzeug>=2.3.0
+
+# 辅助工具
+tqdm>=4.65.0
