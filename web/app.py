@@ -1,6 +1,7 @@
 """
 TransGuide Web 应用
 提供翻译服务的 Web 界面
+后端版本: v1.1.0 - 支持 Excel/PPT
 """
 
 import os
@@ -15,6 +16,10 @@ from functools import wraps
 
 from flask import Flask, render_template, request, jsonify, send_file
 from werkzeug.utils import secure_filename
+
+# 版本信息
+APP_VERSION = 'v1.1.0'
+BUILD_TIME = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
 # 添加项目根目录到路径
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -119,10 +124,11 @@ def allowed_file(filename, allowed_extensions):
 
 
 def login_required(f):
-    """登录验证装饰器"""
+    """登录验证装饰器 - 支持Header或URL参数传递user_id"""
     @wraps(f)
     def decorated_function(*args, **kwargs):
-        user_id = request.headers.get('X-User-ID')
+        # 优先从Header获取，其次从URL参数获取
+        user_id = request.headers.get('X-User-ID') or request.args.get('user_id')
         if not user_id:
             return jsonify({'success': False, 'error': '请先登录'}), 401
 
@@ -154,6 +160,20 @@ def admin_required(f):
 def index():
     """主页面"""
     return render_template('index.html')
+
+
+# ========== 版本检查接口 ==========
+@app.route('/api/version')
+def get_version():
+    """获取后端版本信息"""
+    import modules.file_parser as fp
+    return jsonify({
+        'success': True,
+        'version': APP_VERSION,
+        'build_time': BUILD_TIME,
+        'file_parser_path': fp.__file__,
+        'supported_formats': ['.docx', '.doc', '.xlsx', '.xlsm', '.pptx', '.ppt', '.pdf', '.txt', '.csv']
+    })
 
 
 # ========== 检查4: 添加简单测试路由 ==========
@@ -493,6 +513,73 @@ def get_current_user():
     except Exception as e:
         logger.error(f"获取用户信息失败: {e}")
         return jsonify({'success': False, 'error': str(e)})
+
+
+# ========================================
+# 翻译历史记录辅助函数
+# ========================================
+
+def generate_output_filename(original_name: str, mode: str, user_id: int) -> str:
+    """
+    生成简洁的输出文件名
+    格式: 原文件名_YYYYMMDD_NN.xxx 或 原文件名_YYYYMMDD_NNT.xxx (仅译文)
+    """
+    from datetime import datetime
+
+    stem = Path(original_name).stem
+    suffix = Path(original_name).suffix
+
+    # 清理原文件名（只去除危险字符，保留点和连字符）
+    stem = re.sub(r'[<>:"/\\|?*]', '_', stem)[:40]  # 只保留40字符，保留点和连字符
+
+    date_str = datetime.now().strftime('%Y%m%d')
+
+    # 查询当天该用户已有多少个文件
+    count = user_db.get_user_today_file_count(user_id, date_str)
+    seq = f"{count + 1:02d}"
+
+    mode_suffix = "T" if mode == "target_only" else ""
+
+    return f"{stem}_{date_str}_{seq}{mode_suffix}{suffix}"
+
+
+def extract_summary(blocks: list, translations: dict = None, max_chars: int = 50) -> str:
+    """
+    提取文本摘要，优先使用中文翻译内容
+    1. 优先从翻译后的内容中提取中文标题
+    2. 如果没有翻译，则从原文中提取
+    """
+    texts = []
+
+    # 如果有翻译，优先使用翻译后的中文内容
+    if translations:
+        for block in blocks:
+            idx = block.get('index')
+            if idx in translations:
+                # 使用翻译后的内容
+                translated_text = translations[idx]
+                if translated_text:
+                    texts.append(translated_text)
+            else:
+                # 没有翻译的使用原文
+                text = block.get('text', '')
+                if text:
+                    texts.append(text)
+    else:
+        # 没有翻译，使用原文
+        texts = [b.get('text', '') for b in blocks if b.get('text')]
+
+    # 合并文本
+    full_text = ' '.join(texts)
+
+    # 去除多余空格，取前 N 个字符
+    summary = ' '.join(full_text.split())[:max_chars]
+
+    # 如果截断了，加省略号
+    if len(full_text) > max_chars:
+        summary += '...'
+
+    return summary
 
 
 @app.route('/api/auth/password', methods=['PUT'])
@@ -994,8 +1081,9 @@ def translate_batch():
     try:
         data = request.json
         texts = data.get('texts', [])
+        start_index = data.get('start_index', 0)  # 新增：起始索引偏移
         
-        logger.info(f"收到批量翻译请求，文本数量: {len(texts)}")
+        logger.info(f"收到批量翻译请求，文本数量: {len(texts)}, 起始索引: {start_index}")
         
         if not texts:
             return jsonify({'success': False, 'error': '没有文本需要翻译'})
@@ -1047,14 +1135,22 @@ def translate_batch():
 {combined_text}
 
 【输出格式】
-请按以下格式返回翻译结果，保持 [BLOCK_X] 标记不变：
-[BLOCK_0]
-翻译后的内容...
+请**严格按照以下格式**返回翻译结果，**每个 [BLOCK_X] 必须单独一行，不能合并多个块**：
 
----
+[BLOCK_0]
+翻译后的内容0
 
 [BLOCK_1]
-翻译后的内容...
+翻译后的内容1
+
+[BLOCK_2]
+翻译后的内容2
+
+**重要规则：**
+1. 每个 [BLOCK_X] 标记必须单独一行
+2. 不要合并多个块（如 [BLOCK_9-BLOCK_26] 是错误的）
+3. 必须翻译所有块，不能跳过任何块
+4. 保持 [BLOCK_X] 标记不变，只翻译标记后的内容
 """
         
         logger.info("[后端] 开始调用 LLM 生成翻译...")
@@ -1063,12 +1159,30 @@ def translate_batch():
         
         response = client.generate(prompt)
         logger.info(f"[后端] LLM 响应长度: {len(response)} 字符")
+        logger.info(f"[后端] LLM 完整响应:\n{response}")
+        
+        # 检查空响应
+        if not response or len(response.strip()) == 0:
+            logger.error("[后端] LLM 返回空响应，可能是 API 额度用尽或网络问题")
+            return jsonify({
+                'success': False, 
+                'error': 'LLM 返回空响应，请检查 API 额度或网络连接',
+                'quota_exceeded': True
+            })
+        
         logger.info(f"[后端] LLM 响应开头: {response[:100]}")
         logger.info(f"[后端] LLM 响应结尾: {response[-100:] if len(response) > 100 else response}")
         
+        # 清理 think 标签（MiniMax 模型会添加）
+        # 注意：只移除标签本身，不移除标签之间的内容（因为翻译内容在标签内）
+        response_cleaned = re.sub(r'^\s*<think>\s*', '', response, flags=re.DOTALL).strip()
+        response_cleaned = re.sub(r'\s*</think>\s*$', '', response_cleaned, flags=re.DOTALL).strip()
+        if response_cleaned != response:
+            logger.info(f"[后端] 清理 think 标签后响应长度: {len(response_cleaned)} 字符")
+        
         # 解析响应，提取每个块的翻译
         translations = []
-        blocks = response.split('[BLOCK_')
+        blocks = response_cleaned.split('[BLOCK_')
         logger.info(f"[后端] 分割后块数量: {len(blocks)}")
         
         for i, block in enumerate(blocks):
@@ -1091,16 +1205,28 @@ def translate_batch():
                 
                 logger.info(f"[后端] 块 {i}: 清理后长度={len(translation)}, 内容={translation[:50]}...")
                 
+                # 应用起始索引偏移
+                adjusted_idx = idx + start_index
                 translations.append({
-                    'index': idx,
+                    'index': adjusted_idx,
                     'translation': translation
                 })
             else:
                 logger.info(f"[后端] 块 {i}: 未匹配到索引，内容={block[:50]}...")
         
+        # 计算最后成功翻译的索引
+        last_index = translations[-1]['index'] if translations else -1
+        expected_count = len(texts)
+        actual_count = len(translations)
+        
+        logger.info(f"[后端] 翻译完成: 期望 {expected_count} 个块, 实际 {actual_count} 个块, 最后索引 {last_index}")
+        
         return jsonify({
             'success': True,
             'translations': translations,
+            'last_index': last_index,  # 新增：最后成功翻译的块索引
+            'expected_count': expected_count,  # 新增：期望翻译的块数量
+            'actual_count': actual_count,  # 新增：实际翻译的块数量
             'terms_used': matched_terms
         })
         
@@ -1128,32 +1254,55 @@ def upload_file():
     try:
         if 'file' not in request.files:
             return jsonify({'success': False, 'error': '没有文件'})
-        
+
         file = request.files['file']
         if file.filename == '':
             return jsonify({'success': False, 'error': '文件名为空'})
-        
-        # 保存文件
-        filename = secure_filename(file.filename)
+
+        # 保存原始文件名
+        original_filename = secure_filename(file.filename)
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        filename = f"{timestamp}_{filename}"
-        filepath = UPLOAD_DIR / filename
+        # 保存文件时使用时间戳前缀避免冲突
+        storage_filename = f"{timestamp}_{original_filename}"
+        filepath = UPLOAD_DIR / storage_filename
         file.save(str(filepath))
         
         logger.info(f"上传文件: {filepath}")
         
+        # 调试：检查文件扩展名
+        import os
+        ext = os.path.splitext(str(filepath))[1].lower()
+        logger.info(f"[调试] 文件扩展名: '{ext}'")
+        logger.info(f"[调试] file_parser 模块路径: {file_parser.__file__}")
+        
         # 解析文件
-        blocks, _ = file_parser.parse_file(str(filepath))
+        blocks, format_info = file_parser.parse_file(str(filepath))
         
         if not blocks:
             return jsonify({'success': False, 'error': '无法解析文件或文件为空'})
         
+        # 构建索引到坐标的映射（用于Excel导出）
+        index_mapping = {}
+        is_china_sheet = format_info.get('special_structure') == 'china_sheet'
+        
+        for block in blocks:
+            idx = block['index']
+            if 'sheet' in block:
+                # Excel文件
+                index_mapping[idx] = (block['sheet'], block['row'], block['col'])
+            elif 'slide' in block:
+                # PPT文件
+                index_mapping[idx] = ('ppt', block['slide'], block.get('shape_id', 0))
+        
         return jsonify({
             'success': True,
-            'filename': filename,
+            'filename': storage_filename,  # 存储用的文件名（带时间戳）
+            'original_filename': original_filename,  # 原始文件名
             'filepath': str(filepath),
-            'blocks': blocks[:50],  # 只返回前50个块用于预览
-            'total': len(blocks)
+            'blocks': blocks,  # 返回所有块用于翻译
+            'total': len(blocks),
+            'index_mapping': index_mapping,  # 返回坐标映射
+            'is_china_sheet': is_china_sheet  # 标记是否为特殊结构
         })
         
     except Exception as e:
@@ -1164,66 +1313,164 @@ def upload_file():
 @app.route('/api/translate/file', methods=['POST'])
 @login_required
 def translate_file():
-    """翻译文件"""
+    """翻译文件 - 重新解析完整文件并应用翻译，并记录历史"""
     try:
         data = request.json
-        filename = data.get('filename')
-        filepath = data.get('filepath')
+        filename = data.get('filename')  # 存储用的文件名（带时间戳）
+        original_filename = data.get('original_filename', filename)  # 原始文件名
         translations = data.get('translations', {})
         mode = data.get('mode', 'bilingual')
-        
-        logger.info(f"导出文件请求: {filename}, 翻译条目数: {len(translations)}")
-        
-        if not filepath or not os.path.exists(filepath):
-            return jsonify({'success': False, 'error': '文件不存在'})
-        
-        # 将字符串键转换为整数键
+
+        # 获取当前用户信息
+        user_id = int(request.headers.get('X-User-ID', 0))
+        user = user_db.get_user_by_id(user_id)
+        username = user['username'] if user else 'unknown'
+
+        logger.info(f"导出文件请求: {filename}, 原始文件名: {original_filename}, 翻译条目数: {len(translations)}, 用户: {username}")
+
+        # 使用存储的文件名构建完整路径
+        filepath = UPLOAD_DIR / filename
+        logger.info(f"[导出调试] 文件路径: {filepath}, 是否存在: {filepath.exists()}")
+
+        if not filepath.exists():
+            return jsonify({'success': False, 'error': f'文件不存在: {filepath}'})
+
+        # 重新解析完整文件，获取所有文本块
+        logger.info("[导出调试] 重新解析完整文件...")
+        all_blocks, format_info = file_parser.parse_file(str(filepath))
+        logger.info(f"[导出调试] 完整文件包含 {len(all_blocks)} 个文本块")
+
+        # 提取摘要
+        summary = extract_summary(all_blocks, max_chars=50)
+        logger.info(f"[导出调试] 文件摘要: {summary}")
+
+        # 计算总字符数
+        total_chars = sum(len(b.get('text', '')) for b in all_blocks)
+
+        # 处理翻译字典
+        # 前端可能发送两种格式：
+        # 1. 整数索引: {"0": "翻译", "1": "翻译"}
+        # 2. 坐标格式（中国表）: {"中国,1,2": "翻译", ...}
         translations_int = {}
+        coord_translations = {}  # 用于中国表的坐标格式
+
         for key, value in translations.items():
-            try:
-                translations_int[int(key)] = value
-            except (ValueError, TypeError):
-                translations_int[key] = value
-        
-        logger.info(f"转换后的翻译键: {list(translations_int.keys())[:5]}...")
-        
-        # 确定输出路径
-        suffix = "_双语" if mode == "bilingual" else "_译文"
-        output_filename = f"{Path(filename).stem}{suffix}{Path(filename).suffix}"
+            # 检查是否是坐标格式 (sheet,row,col)
+            if ',' in str(key) and str(key).count(',') == 2:
+                # 坐标格式，直接保存
+                coord_translations[key] = value
+            else:
+                # 尝试转换为整数索引
+                try:
+                    translations_int[int(key)] = value
+                except (ValueError, TypeError):
+                    translations_int[key] = value
+
+        logger.info(f"[导出调试] 翻译字典包含 {len(translations_int)} 个索引翻译, {len(coord_translations)} 个坐标翻译")
+        logger.info(f"[导出调试] 翻译键示例: {list(translations_int.keys())[:10]}...")
+        if coord_translations:
+            logger.info(f"[导出调试] 坐标翻译键示例: {list(coord_translations.keys())[:5]}...")
+
+        # 构建完整的翻译映射（包含所有文本块）
+        full_translation_map = {}
+        for block in all_blocks:
+            idx = block['index']
+            if idx in translations_int:
+                full_translation_map[idx] = translations_int[idx]
+            else:
+                if mode == 'target_only':
+                    full_translation_map[idx] = block['text']
+
+        logger.info(f"[导出调试] 完整翻译映射包含 {len(full_translation_map)} 个条目")
+
+        # 生成新的输出文件名（短格式），使用原始文件名
+        output_filename = generate_output_filename(original_filename, mode, user_id)
         output_path = OUTPUT_DIR / output_filename
-        
+
         # 获取文件类型
-        ext = Path(filename).suffix.lower()
-        
-        if ext in ['.docx', '.doc']:
-            success = file_exporter.export_word_simple(
-                filepath, translations_int, str(output_path), mode
-            )
-        elif ext in ['.xlsx', '.xls']:
-            # Excel 需要特殊处理坐标映射
-            excel_translations = {}
-            for key, value in translations_int.items():
-                if isinstance(key, str) and ',' in key:
-                    # 解析 "sheet,row,col" 格式
-                    parts = key.split(',')
-                    if len(parts) == 3:
-                        excel_translations[(parts[0], int(parts[1]), int(parts[2]))] = value
-            success = file_exporter.export_excel_simple(
-                filepath, excel_translations, str(output_path), mode
-            )
-        else:
-            return jsonify({'success': False, 'error': '不支持的文件类型'})
-        
-        if success:
-            return jsonify({
-                'success': True,
-                'download_url': f'/api/download/{output_filename}'
-            })
-        else:
-            return jsonify({'success': False, 'error': '导出失败'})
-        
+        ext = Path(original_filename).suffix.lower()
+        file_type = ext[1:] if ext.startswith('.') else ext
+        is_china_sheet = data.get('is_china_sheet', False)
+
+        # 创建历史记录（状态为 processing）
+        record_id = user_db.create_translation_record(
+            user_id=user_id,
+            username=username,
+            original_filename=original_filename,
+            output_filename=output_filename,
+            file_type=file_type,
+            summary=summary,
+            block_count=len(all_blocks),
+            total_chars=total_chars,
+            mode=mode,
+            file_path=str(output_path)
+        )
+        logger.info(f"[导出调试] 创建历史记录 ID: {record_id}")
+
+        try:
+            # 执行导出
+            if ext in ['.docx', '.doc']:
+                success = file_exporter.export_word_simple(
+                    filepath, full_translation_map, str(output_path), mode
+                )
+            elif ext in ['.xlsx', '.xls', '.xlsm']:
+                excel_translations = {}
+
+                # 如果有坐标格式的翻译（中国表），直接使用
+                if coord_translations:
+                    for key, value in coord_translations.items():
+                        parts = key.split(',')
+                        if len(parts) == 3:
+                            sheet, row, col = parts[0], int(parts[1]), int(parts[2])
+                            excel_translations[(sheet, row, col)] = value
+                    logger.info(f"[导出调试] 使用坐标翻译，共 {len(excel_translations)} 个")
+                else:
+                    # 使用索引映射
+                    for key, value in full_translation_map.items():
+                        block = next((b for b in all_blocks if b['index'] == key), None)
+                        if block and 'sheet' in block:
+                            excel_translations[(block['sheet'], block['row'], block['col'])] = value
+                    logger.info(f"[导出调试] 使用索引映射翻译，共 {len(excel_translations)} 个")
+
+                success = file_exporter.export_excel_simple(
+                    filepath, excel_translations, str(output_path), mode, is_china_sheet
+                )
+            elif ext == '.pptx':
+                success = file_exporter.export_pptx(
+                    filepath, full_translation_map, str(output_path), mode
+                )
+            else:
+                user_db.complete_translation_record(record_id, 0, '不支持的文件类型')
+                return jsonify({'success': False, 'error': '不支持的文件类型'})
+
+            if success:
+                # 获取文件大小
+                file_size = output_path.stat().st_size if output_path.exists() else 0
+
+                # 使用翻译后的内容重新提取摘要（中文）
+                chinese_summary = extract_summary(all_blocks, full_translation_map, max_chars=50)
+                logger.info(f"[导出调试] 中文摘要: {chinese_summary}")
+
+                user_db.complete_translation_record(record_id, file_size, summary=chinese_summary)
+                logger.info(f"[导出调试] 翻译完成，文件大小: {file_size} 字节")
+
+                return jsonify({
+                    'success': True,
+                    'download_url': f'/api/download/{output_filename}',
+                    'history_id': record_id
+                })
+            else:
+                user_db.complete_translation_record(record_id, 0, '导出失败')
+                return jsonify({'success': False, 'error': '导出失败'})
+
+        except Exception as export_error:
+            user_db.complete_translation_record(record_id, 0, str(export_error))
+            raise
+
     except Exception as e:
         logger.error(f"翻译文件失败: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
         return jsonify({'success': False, 'error': str(e)})
 
 
@@ -1233,12 +1480,139 @@ def download_file(filename):
     """下载翻译后的文件"""
     try:
         filepath = OUTPUT_DIR / filename
+        logger.info(f"[下载调试] 请求下载: {filename}")
+        logger.info(f"[下载调试] 完整路径: {filepath}")
+        logger.info(f"[下载调试] 文件存在: {filepath.exists()}")
+
         if filepath.exists():
+            logger.info(f"[下载调试] 文件大小: {filepath.stat().st_size} 字节")
             return send_file(str(filepath), as_attachment=True)
         else:
+            # 列出输出目录中的文件
+            if OUTPUT_DIR.exists():
+                files = list(OUTPUT_DIR.iterdir())
+                logger.info(f"[下载调试] 输出目录中的文件: {[f.name for f in files]}")
             return jsonify({'success': False, 'error': '文件不存在'})
     except Exception as e:
         logger.error(f"下载文件失败: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        return jsonify({'success': False, 'error': str(e)})
+
+
+# ========================================
+# 翻译历史记录 API
+# ========================================
+
+@app.route('/api/history', methods=['GET'])
+@login_required
+def get_translation_history():
+    """获取翻译历史列表，支持模糊搜索和用户筛选"""
+    try:
+        user_id = int(request.headers.get('X-User-ID', 0))
+        user = user_db.get_user_by_id(user_id)
+
+        # 获取查询参数
+        page = request.args.get('page', 1, type=int)
+        limit = request.args.get('limit', 20, type=int)
+        status = request.args.get('status', None)
+        keyword = request.args.get('keyword', None)  # 模糊搜索关键词
+        username = request.args.get('username', None)  # 按用户名筛选
+
+        # 管理员可以查看所有历史，普通用户只能看自己的
+        if user and user.get('role') == 'admin':
+            target_user_id = request.args.get('user_id', None, type=int)
+            # 管理员可以按用户名筛选
+            if not username:
+                username = request.args.get('filter_username', None)
+        else:
+            target_user_id = user_id
+            # 普通用户不能按用户名筛选
+            username = None
+
+        result = user_db.get_translation_history(
+            user_id=target_user_id,
+            page=page,
+            limit=limit,
+            status=status,
+            keyword=keyword,
+            username=username
+        )
+
+        # 添加下载链接
+        for item in result['items']:
+            item['download_url'] = f"/api/download/{item['output_filename']}"
+
+        return jsonify({'success': True, 'data': result})
+
+    except Exception as e:
+        logger.error(f"获取翻译历史失败: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        return jsonify({'success': False, 'error': str(e)})
+
+
+@app.route('/api/history/<int:record_id>', methods=['GET'])
+@login_required
+def get_translation_record(record_id):
+    """获取单条翻译记录详情"""
+    try:
+        user_id = int(request.headers.get('X-User-ID', 0))
+        user = user_db.get_user_by_id(user_id)
+
+        record = user_db.get_translation_record(record_id)
+
+        if not record:
+            return jsonify({'success': False, 'error': '记录不存在'})
+
+        # 检查权限（只能看自己的，管理员可以看所有）
+        if user.get('role') != 'admin' and record['user_id'] != user_id:
+            return jsonify({'success': False, 'error': '无权访问此记录'})
+
+        # 添加下载链接
+        record['download_url'] = f"/api/download/{record['output_filename']}"
+
+        return jsonify({'success': True, 'data': record})
+
+    except Exception as e:
+        logger.error(f"获取翻译记录详情失败: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        return jsonify({'success': False, 'error': str(e)})
+
+
+@app.route('/api/history/<int:record_id>', methods=['DELETE'])
+@login_required
+def delete_translation_record(record_id):
+    """删除翻译记录"""
+    try:
+        user_id = int(request.headers.get('X-User-ID', 0))
+        user = user_db.get_user_by_id(user_id)
+
+        # 获取记录信息
+        record = user_db.get_translation_record(record_id)
+        if not record:
+            return jsonify({'success': False, 'error': '记录不存在'})
+
+        # 检查权限（只能删除自己的，管理员可以删除所有）
+        if user.get('role') != 'admin' and record['user_id'] != user_id:
+            return jsonify({'success': False, 'error': '无权删除此记录'})
+
+        # 删除物理文件
+        filepath = Path(record['file_path'])
+        if filepath.exists():
+            filepath.unlink()
+            logger.info(f"[历史记录] 删除文件: {filepath}")
+
+        # 删除数据库记录
+        user_db.delete_translation_record(record_id)
+
+        return jsonify({'success': True, 'message': '记录已删除'})
+
+    except Exception as e:
+        logger.error(f"删除翻译记录失败: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
         return jsonify({'success': False, 'error': str(e)})
 
 

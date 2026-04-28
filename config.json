@@ -1,11 +1,8 @@
 {
   "llm": {
     "type": "api",
-    "local_model_path": "./models/qwen2.5-7b.gguf",
-    "context_length": 4096,
-    "temperature": 0.3,
-    "gpu_layers": 0,
-    "max_tokens": 2048
+    "max_tokens": 8192,
+    "temperature": 0.3
   },
   "api": {
     "base_url": "https://api.minimaxi.com/v1",

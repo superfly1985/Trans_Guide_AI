@@ -186,8 +186,7 @@ class APILLMClient(BaseLLMClient):
                     {"role": "system", "content": "You are a helpful assistant."},
                     {"role": "user", "content": prompt}
                 ],
-                max_tokens=kwargs.get("max_tokens", self.max_tokens),
-                extra_body={"reasoning_split": True}
+                max_tokens=kwargs.get("max_tokens", self.max_tokens)
             )
             
             return response.choices[0].message.content.strip()
