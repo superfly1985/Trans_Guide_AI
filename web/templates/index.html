@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="zh-CN" data-theme="light">
+<html lang="zh-CN" data-theme="dark">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -322,6 +322,15 @@
                             readonly
                             spellcheck="false"
                         ></textarea>
+                    </div>
+                    
+                    <!-- 文本翻译加载遮罩层 -->
+                    <div class="loading-overlay" id="textTranslatingOverlay" style="display: none;">
+                        <div class="loading-content">
+                            <div class="loading-spinner"></div>
+                            <p class="loading-text">正在翻译...</p>
+                            <p class="loading-subtext">AI 正在处理，请稍候</p>
+                        </div>
                     </div>
                 </div>
             </div>
