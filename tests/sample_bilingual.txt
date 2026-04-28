@@ -1,0 +1,17 @@
+Install the mounting bracket onto the frame using four M8 bolts.
+使用四颗M8螺栓将安装支架安装到车架上。
+
+Torque the bolts to 25 Nm using a torque wrench.
+使用扭力扳手将螺栓拧紧至25牛米。
+
+Connect the wiring harness to the control module.
+将线束连接到控制模块。
+
+Ensure all connections are secure before proceeding.
+在继续之前确保所有连接牢固。
+
+Warning: Disconnect the power supply before performing maintenance.
+警告：执行维护前断开电源。
+
+Note: Refer to the service manual for detailed instructions.
+注意：详细说明请参阅维修手册。
