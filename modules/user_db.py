@@ -43,6 +43,7 @@ class UserDatabase:
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 last_login TIMESTAMP,
+                login_count INTEGER DEFAULT 0,
                 approved_by INTEGER,
                 approved_at TIMESTAMP,
                 reject_reason TEXT
@@ -103,16 +104,97 @@ class UserDatabase:
 
         # 创建索引
         cursor.execute("""
-            CREATE INDEX IF NOT EXISTS idx_history_user 
+            CREATE INDEX IF NOT EXISTS idx_history_user
             ON translation_history(user_id)
         """)
         cursor.execute("""
-            CREATE INDEX IF NOT EXISTS idx_history_created 
+            CREATE INDEX IF NOT EXISTS idx_history_created
             ON translation_history(created_at)
         """)
         cursor.execute("""
-            CREATE INDEX IF NOT EXISTS idx_history_status 
+            CREATE INDEX IF NOT EXISTS idx_history_status
             ON translation_history(status)
+        """)
+
+        # LLM使用统计表
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS llm_usage (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER,
+                operation_type TEXT,
+                model_name TEXT,
+                input_tokens INTEGER DEFAULT 0,
+                output_tokens INTEGER DEFAULT 0,
+                total_tokens INTEGER DEFAULT 0,
+                response_time_ms INTEGER DEFAULT 0,
+                status TEXT DEFAULT 'success',
+                error_message TEXT,
+                request_size_bytes INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users(id)
+            )
+        """)
+
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_llm_usage_user_id ON llm_usage(user_id)
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_llm_usage_created_at ON llm_usage(created_at)
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_llm_usage_operation ON llm_usage(operation_type)
+        """)
+
+        # 系统统计快照表
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS system_stats (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                stat_date DATE UNIQUE,
+                total_users INTEGER DEFAULT 0,
+                active_users_7d INTEGER DEFAULT 0,
+                active_users_30d INTEGER DEFAULT 0,
+                new_users_today INTEGER DEFAULT 0,
+                total_files INTEGER DEFAULT 0,
+                files_today INTEGER DEFAULT 0,
+                total_words_translated INTEGER DEFAULT 0,
+                total_terms INTEGER DEFAULT 0,
+                new_terms_today INTEGER DEFAULT 0,
+                llm_calls_today INTEGER DEFAULT 0,
+                llm_tokens_today INTEGER DEFAULT 0,
+                llm_errors_today INTEGER DEFAULT 0,
+                db_size_bytes INTEGER DEFAULT 0,
+                log_size_bytes INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_system_stats_date ON system_stats(stat_date)
+        """)
+
+        # 术语反馈表
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS term_feedback (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                term_source TEXT NOT NULL,
+                current_target TEXT,
+                suggested_target TEXT,
+                feedback_type TEXT DEFAULT 'better',
+                user_id INTEGER,
+                status TEXT DEFAULT 'pending',
+                admin_notes TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                resolved_at TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users(id)
+            )
+        """)
+
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_term_feedback_status ON term_feedback(status)
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_term_feedback_created ON term_feedback(created_at)
         """)
 
         conn.commit()
@@ -337,15 +419,38 @@ class UserDatabase:
     def disable_user(self, user_id: int, admin_id: int, reason: str = "") -> Dict:
         """
         禁用用户
+        规则：
+        1. 只有管理员可以禁用用户
+        2. 不能禁用自己
+        3. 不能禁用初始管理员（username='admin'）
+        4. 可以禁用其他管理员
         """
         conn = self._get_connection()
         cursor = conn.cursor()
 
+        # 检查操作者权限
         cursor.execute("SELECT role FROM users WHERE id = ?", (admin_id,))
         admin = cursor.fetchone()
         if not admin or admin['role'] != 'admin':
             conn.close()
             return {'success': False, 'message': '无权限执行此操作'}
+
+        # 不能禁用自己
+        if user_id == admin_id:
+            conn.close()
+            return {'success': False, 'message': '不能禁用自己'}
+
+        # 获取目标用户信息
+        cursor.execute("SELECT username, role FROM users WHERE id = ?", (user_id,))
+        target_user = cursor.fetchone()
+        if not target_user:
+            conn.close()
+            return {'success': False, 'message': '用户不存在'}
+
+        # 不能禁用初始管理员（username='admin'）
+        if target_user['username'] == 'admin':
+            conn.close()
+            return {'success': False, 'message': '不能禁用初始管理员'}
 
         cursor.execute("""
             UPDATE users SET status = 'disabled' WHERE id = ?
@@ -483,6 +588,92 @@ class UserDatabase:
 
         return {'success': True, 'message': '用户已删除'}
 
+    def update_user(self, user_id: int, admin_id: int, email: str = None, role: str = None, password: str = None) -> Dict:
+        """编辑用户信息"""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+
+        # 检查管理员权限
+        cursor.execute("SELECT role FROM users WHERE id = ?", (admin_id,))
+        admin = cursor.fetchone()
+        if not admin or admin['role'] != 'admin':
+            conn.close()
+            return {'success': False, 'message': '无权限执行此操作'}
+
+        # 检查用户是否存在
+        cursor.execute("SELECT id FROM users WHERE id = ?", (user_id,))
+        if not cursor.fetchone():
+            conn.close()
+            return {'success': False, 'message': '用户不存在'}
+
+        # 构建更新字段
+        updates = []
+        params = []
+
+        if email is not None:
+            updates.append("email = ?")
+            params.append(email)
+
+        if role is not None:
+            updates.append("role = ?")
+            params.append(role)
+
+        if password and len(password) >= 6:
+            salt = secrets.token_hex(16)
+            password_hash = self._hash_password(password, salt)
+            updates.append("password_hash = ?")
+            params.append(password_hash)
+            updates.append("salt = ?")
+            params.append(salt)
+
+        if not updates:
+            conn.close()
+            return {'success': False, 'message': '没有要更新的内容'}
+
+        updates.append("updated_at = ?")
+        params.append(datetime.now())
+        params.append(user_id)
+
+        # 执行更新
+        cursor.execute(f"""
+            UPDATE users SET {', '.join(updates)}
+            WHERE id = ?
+        """, params)
+
+        conn.commit()
+        conn.close()
+
+        return {'success': True, 'message': '用户信息已更新'}
+
+    def enable_user(self, user_id: int, admin_id: int) -> Dict:
+        """启用用户"""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+
+        # 检查管理员权限
+        cursor.execute("SELECT role FROM users WHERE id = ?", (admin_id,))
+        admin = cursor.fetchone()
+        if not admin or admin['role'] != 'admin':
+            conn.close()
+            return {'success': False, 'message': '无权限执行此操作'}
+
+        # 更新用户状态
+        cursor.execute("""
+            UPDATE users SET status = 'approved', updated_at = ?
+            WHERE id = ?
+        """, (datetime.now(), user_id))
+
+        # 记录操作日志
+        cursor.execute("""
+            INSERT INTO approval_logs (user_id, action, performed_by, reason)
+            VALUES (?, ?, ?, ?)
+        """, (user_id, 'enable', admin_id, '管理员启用用户'))
+
+        conn.commit()
+        conn.close()
+
+        return {'success': True, 'message': '用户已启用'}
+
     def get_user_by_id(self, user_id: int) -> Optional[Dict]:
         """根据ID获取用户信息"""
         conn = self._get_connection()
@@ -497,6 +688,82 @@ class UserDatabase:
         conn.close()
 
         return dict(row) if row else None
+
+    def update_user_settings(self, user_id: int, old_password: str, new_email: str = None, new_password: str = None) -> Dict:
+        """
+        用户自己修改设置（邮箱和密码）
+
+        Args:
+            user_id: 用户ID
+            old_password: 旧密码（用于验证身份）
+            new_email: 新邮箱（可选）
+            new_password: 新密码（可选）
+
+        Returns:
+            {'success': bool, 'message': str}
+        """
+        conn = self._get_connection()
+        cursor = conn.cursor()
+
+        # 获取用户信息
+        cursor.execute("""
+            SELECT id, username, email, password_hash, salt, role, status
+            FROM users WHERE id = ?
+        """, (user_id,))
+
+        row = cursor.fetchone()
+        if not row:
+            conn.close()
+            return {'success': False, 'message': '用户不存在'}
+
+        user = dict(row)
+
+        # 验证旧密码
+        if not self._verify_password(old_password, user['salt'], user['password_hash']):
+            conn.close()
+            return {'success': False, 'message': '当前密码错误'}
+
+        # 检查新邮箱是否已被使用
+        if new_email and new_email != user['email']:
+            cursor.execute("SELECT id FROM users WHERE email = ? AND id != ?", (new_email, user_id))
+            if cursor.fetchone():
+                conn.close()
+                return {'success': False, 'message': '该邮箱已被其他用户使用'}
+
+        # 构建更新字段
+        updates = []
+        params = []
+
+        if new_email and new_email != user['email']:
+            updates.append("email = ?")
+            params.append(new_email)
+
+        if new_password and len(new_password) >= 6:
+            salt = secrets.token_hex(16)
+            password_hash = self._hash_password(new_password, salt)
+            updates.append("password_hash = ?")
+            params.append(password_hash)
+            updates.append("salt = ?")
+            params.append(salt)
+
+        if not updates:
+            conn.close()
+            return {'success': False, 'message': '没有要更新的内容'}
+
+        updates.append("updated_at = ?")
+        params.append(datetime.now())
+        params.append(user_id)
+
+        # 执行更新
+        cursor.execute(f"""
+            UPDATE users SET {', '.join(updates)}
+            WHERE id = ?
+        """, params)
+
+        conn.commit()
+        conn.close()
+
+        return {'success': True, 'message': '个人设置已更新'}
 
     # ==================== 翻译历史记录管理 ====================
 
@@ -669,6 +936,195 @@ class UserDatabase:
         conn.close()
 
         return count
+
+    # ========================================
+    # LLM使用统计方法
+    # ========================================
+
+    def record_llm_usage(self, user_id: int, operation_type: str, model_name: str,
+                        input_tokens: int = 0, output_tokens: int = 0,
+                        response_time_ms: int = 0, status: str = 'success',
+                        error_message: str = '', request_size_bytes: int = 0) -> bool:
+        """记录LLM使用情况"""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+
+        total_tokens = input_tokens + output_tokens
+
+        try:
+            cursor.execute("""
+                INSERT INTO llm_usage
+                (user_id, operation_type, model_name, input_tokens, output_tokens,
+                 total_tokens, response_time_ms, status, error_message, request_size_bytes)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (user_id, operation_type, model_name, input_tokens, output_tokens,
+                  total_tokens, response_time_ms, status, error_message, request_size_bytes))
+
+            conn.commit()
+            return True
+        except Exception as e:
+            print(f"记录LLM使用失败: {e}")
+            return False
+        finally:
+            conn.close()
+
+    def get_llm_usage_stats(self, days: int = 30) -> Dict:
+        """获取LLM使用统计"""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+
+        # 总调用次数
+        cursor.execute("SELECT COUNT(*) FROM llm_usage")
+        total_calls = cursor.fetchone()[0]
+
+        # 今日调用
+        cursor.execute("""
+            SELECT COUNT(*) FROM llm_usage
+            WHERE date(created_at) = date('now')
+        """)
+        today_calls = cursor.fetchone()[0]
+
+        # 总token消耗
+        cursor.execute("SELECT SUM(total_tokens) FROM llm_usage")
+        total_tokens = cursor.fetchone()[0] or 0
+
+        # 平均响应时间
+        cursor.execute("""
+            SELECT AVG(response_time_ms) FROM llm_usage
+            WHERE status = 'success'
+        """)
+        avg_response_time = cursor.fetchone()[0] or 0
+
+        # 错误率
+        cursor.execute("""
+            SELECT COUNT(*) FROM llm_usage WHERE status != 'success'
+        """)
+        error_count = cursor.fetchone()[0]
+        error_rate = error_count / total_calls if total_calls > 0 else 0
+
+        # 各操作类型分布
+        cursor.execute("""
+            SELECT operation_type, COUNT(*) as count
+            FROM llm_usage
+            GROUP BY operation_type
+            ORDER BY count DESC
+        """)
+        operation_stats = {row[0]: row[1] for row in cursor.fetchall()}
+
+        # 趋势数据
+        cursor.execute("""
+            SELECT date(created_at) as date, COUNT(*) as count, SUM(total_tokens) as tokens
+            FROM llm_usage
+            WHERE created_at >= date('now', '-{} days')
+            GROUP BY date(created_at)
+            ORDER BY date
+        """.format(days))
+
+        trend = []
+        for row in cursor.fetchall():
+            trend.append({
+                'date': row[0],
+                'calls': row[1],
+                'tokens': row[2] or 0
+            })
+
+        conn.close()
+
+        return {
+            'total_calls': total_calls,
+            'today_calls': today_calls,
+            'total_tokens': total_tokens,
+            'avg_response_time': round(avg_response_time, 2),
+            'error_rate': round(error_rate, 4),
+            'operation_stats': operation_stats,
+            'trend': trend
+        }
+
+    # ========================================
+    # 系统统计方法
+    # ========================================
+
+    def get_system_overview(self) -> Dict:
+        """获取系统概览统计"""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+
+        # 用户统计
+        cursor.execute("SELECT COUNT(*) FROM users")
+        total_users = cursor.fetchone()[0]
+
+        cursor.execute("""
+            SELECT COUNT(*) FROM users
+            WHERE status = 'pending'
+        """)
+        pending_users = cursor.fetchone()[0]
+
+        cursor.execute("""
+            SELECT COUNT(*) FROM users
+            WHERE last_login >= date('now', '-7 days')
+        """)
+        active_7d = cursor.fetchone()[0]
+
+        cursor.execute("""
+            SELECT COUNT(*) FROM users
+            WHERE last_login >= date('now', '-30 days')
+        """)
+        active_30d = cursor.fetchone()[0]
+
+        cursor.execute("""
+            SELECT COUNT(*) FROM users
+            WHERE date(created_at) = date('now')
+        """)
+        new_today = cursor.fetchone()[0]
+
+        # 文件统计
+        cursor.execute("SELECT COUNT(*) FROM translation_history")
+        total_files = cursor.fetchone()[0]
+
+        cursor.execute("""
+            SELECT COUNT(*) FROM translation_history
+            WHERE date(created_at) = date('now')
+        """)
+        files_today = cursor.fetchone()[0]
+
+        # 本月统计
+        cursor.execute("""
+            SELECT COUNT(*) FROM translation_history
+            WHERE strftime('%Y-%m', created_at) = strftime('%Y-%m', 'now')
+        """)
+        files_this_month = cursor.fetchone()[0]
+
+        conn.close()
+
+        return {
+            'users': {
+                'total': total_users,
+                'pending': pending_users,
+                'active_7d': active_7d,
+                'active_30d': active_30d,
+                'new_today': new_today
+            },
+            'files': {
+                'total': total_files,
+                'today': files_today,
+                'this_month': files_this_month
+            }
+        }
+
+    def update_user_login(self, user_id: int):
+        """更新用户最后登录时间"""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            UPDATE users
+            SET last_login = CURRENT_TIMESTAMP,
+                login_count = login_count + 1
+            WHERE id = ?
+        """, (user_id,))
+
+        conn.commit()
+        conn.close()
 
 
 # 全局实例

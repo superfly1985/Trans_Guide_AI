@@ -15,7 +15,6 @@ const UPLOAD_DIR = 'uploads';
 // 全局状态
 const state = {
     currentView: 'import',
-    theme: localStorage.getItem('theme') || 'light',
     // 导入功能状态
     importFile: null,
     importData: null,
@@ -30,7 +29,9 @@ const state = {
     historyPage: 1,
     historyLimit: 10,
     historyTotal: 0,
-    historyData: []
+    historyData: [],
+    // 翻译方向状态
+    translationDirection: localStorage.getItem('translationDirection') || 'en2zh'
 };
 
 // 获取请求头（包含用户认证）
@@ -46,7 +47,6 @@ function getAuthHeaders() {
 
 // DOM 元素
 const elements = {
-    themeToggle: document.getElementById('themeToggle'),
     navItems: document.querySelectorAll('.nav-item'),
     views: document.querySelectorAll('.view'),
     termsCount: document.getElementById('termsCount'),
@@ -107,14 +107,20 @@ const elements = {
     loginBtn: document.getElementById('loginBtn'),
     userInfo: document.getElementById('userInfo'),
     userName: document.getElementById('userName'),
-    userRole: document.getElementById('userRole')
+    userRole: document.getElementById('userRole'),
+    userEmail: document.getElementById('userEmail'),
+    userSettingsBtn: document.getElementById('userSettingsBtn')
 };
 
 // 初始化
-function init() {
-    // 设置主题
-    document.documentElement.setAttribute('data-theme', state.theme);
-    updateThemeIcon();
+async function init() {
+    // 设置主题为暗色（固定）
+    document.documentElement.setAttribute('data-theme', 'dark');
+
+    // 初始化翻译方向
+    document.body.setAttribute('data-direction', state.translationDirection);
+    updateTranslationDirectionUI();
+    updateTranslationPlaceholder();
 
     // 初始化用户状态
     initUserState();
@@ -122,9 +128,28 @@ function init() {
     // 绑定事件
     bindEvents();
 
+    // 加载版本信息
+    await loadVersionInfo();
+
     // 如果已登录，加载统计数据
     if (state.user) {
         loadStats();
+    }
+}
+
+// 加载版本信息
+async function loadVersionInfo() {
+    try {
+        const response = await fetch('/api/version');
+        const data = await response.json();
+        if (data.success) {
+            const backendVersionEl = document.getElementById('backendVersion');
+            if (backendVersionEl) {
+                backendVersionEl.textContent = `Backend ${data.backend}`;
+            }
+        }
+    } catch (error) {
+        console.log('Failed to load version info:', error);
     }
 }
 
@@ -140,9 +165,6 @@ function initUserState() {
 
 // 绑定事件
 function bindEvents() {
-    // 主题切换
-    elements.themeToggle.addEventListener('click', toggleTheme);
-
     // 导航切换
     elements.navItems.forEach(item => {
         item.addEventListener('click', () => switchView(item.dataset.view));
@@ -171,6 +193,34 @@ function bindEvents() {
 
     // 术语库管理事件
     bindTermManagementEvents();
+
+    // About 弹窗事件
+    bindAboutEvents();
+}
+
+// 绑定 About 弹窗事件
+function bindAboutEvents() {
+    const aboutBtn = document.getElementById('aboutBtn');
+    const aboutModal = document.getElementById('aboutModal');
+    const closeAboutBtn = document.getElementById('closeAboutBtn');
+
+    aboutBtn?.addEventListener('click', () => {
+        aboutModal.style.display = 'flex';
+    });
+
+    closeAboutBtn?.addEventListener('click', () => {
+        aboutModal.style.display = 'none';
+    });
+
+    // 点击遮罩关闭
+    aboutModal?.addEventListener('click', (e) => {
+        if (e.target === aboutModal) {
+            aboutModal.style.display = 'none';
+        }
+    });
+
+    // 个人设置事件绑定
+    bindUserSettingsEvents();
 }
 
 // 绑定术语管理事件
@@ -248,6 +298,127 @@ function bindTermManagementEvents() {
     document.querySelectorAll('.admin-tab').forEach(tab => {
         tab.addEventListener('click', () => switchAdminTab(tab.dataset.tab));
     });
+
+    // 用户管理页面标签切换
+    document.querySelectorAll('.admin-view-tab').forEach(tab => {
+        tab.addEventListener('click', () => switchAdminViewTab(tab.dataset.tab));
+    });
+
+    // 刷新用户列表按钮
+    document.getElementById('refreshUsersBtn')?.addEventListener('click', () => {
+        const activeTab = document.querySelector('.admin-view-tab.active')?.dataset.tab;
+        if (activeTab === 'pending') {
+            loadPendingUsersView();
+        } else if (activeTab === 'all') {
+            loadAllUsersView();
+        }
+    });
+
+    // 刷新统计面板按钮
+    document.getElementById('refreshStatsBtn')?.addEventListener('click', () => {
+        loadStatsView();
+    });
+
+    // 编辑用户弹窗事件
+    document.getElementById('closeEditUserModal')?.addEventListener('click', closeEditUserModal);
+    document.getElementById('cancelEditUser')?.addEventListener('click', closeEditUserModal);
+    document.getElementById('saveEditUser')?.addEventListener('click', saveUserEdit);
+    document.getElementById('closeEditUserModal')?.addEventListener('click', closeEditUserModal);
+
+    // 翻译方向切换器事件绑定
+    bindTranslationDirectionEvents();
+}
+
+// 绑定翻译方向切换器事件
+function bindTranslationDirectionEvents() {
+    // 文件翻译页切换器
+    const fileLangSwitcher = document.getElementById('fileLangSwitcher');
+    if (fileLangSwitcher) {
+        fileLangSwitcher.querySelectorAll('.lang-switch-pill-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const direction = btn.dataset.direction;
+                setTranslationDirection(direction);
+            });
+        });
+    }
+
+    // 文本翻译页顶部切换器
+    const textLangSwitcherTop = document.getElementById('textLangSwitcherTop');
+    if (textLangSwitcherTop) {
+        textLangSwitcherTop.querySelectorAll('.lang-switch-pill-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const direction = btn.dataset.direction;
+                setTranslationDirection(direction);
+            });
+        });
+    }
+
+}
+
+// 设置翻译方向
+function setTranslationDirection(direction) {
+    if (direction !== 'en2zh' && direction !== 'zh2en') return;
+
+    // 更新状态
+    state.translationDirection = direction;
+    localStorage.setItem('translationDirection', direction);
+
+    // 更新body属性用于CSS选择器
+    document.body.setAttribute('data-direction', direction);
+
+    // 更新所有切换器UI
+    updateTranslationDirectionUI();
+
+    // 更新输入框placeholder
+    updateTranslationPlaceholder();
+}
+
+// 更新翻译方向切换器UI
+function updateTranslationDirectionUI() {
+    const direction = state.translationDirection;
+
+    // 更新文件翻译页切换器
+    document.querySelectorAll('#fileLangSwitcher .lang-switch-pill-btn').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.direction === direction);
+    });
+
+    // 更新文本翻译页顶部切换器
+    document.querySelectorAll('#textLangSwitcherTop .lang-switch-pill-btn').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.direction === direction);
+    });
+
+}
+
+// 更新翻译输入框placeholder
+function updateTranslationPlaceholder() {
+    const sourceText = document.getElementById('sourceText');
+    const targetText = document.getElementById('targetText');
+    const sourceFlag = document.getElementById('sourceFlag');
+    const targetFlag = document.getElementById('targetFlag');
+
+    if (state.translationDirection === 'en2zh') {
+        if (sourceText) sourceText.placeholder = '输入要翻译的英文...';
+        if (targetText) targetText.placeholder = '翻译结果（中文）...';
+        if (sourceFlag) {
+            sourceFlag.textContent = 'US';
+            sourceFlag.setAttribute('data-lang', 'en');
+        }
+        if (targetFlag) {
+            targetFlag.textContent = 'CN';
+            targetFlag.setAttribute('data-lang', 'zh');
+        }
+    } else {
+        if (sourceText) sourceText.placeholder = '输入要翻译的中文...';
+        if (targetText) targetText.placeholder = '翻译结果（英文）...';
+        if (sourceFlag) {
+            sourceFlag.textContent = 'CN';
+            sourceFlag.setAttribute('data-lang', 'zh');
+        }
+        if (targetFlag) {
+            targetFlag.textContent = 'US';
+            targetFlag.setAttribute('data-lang', 'en');
+        }
+    }
 }
 
 // 绑定导入功能事件
@@ -381,20 +552,8 @@ function debounce(func, wait) {
 }
 
 // ========================================
-// 主题和导航
+// 导航
 // ========================================
-
-function toggleTheme() {
-    state.theme = state.theme === 'light' ? 'dark' : 'light';
-    document.documentElement.setAttribute('data-theme', state.theme);
-    localStorage.setItem('theme', state.theme);
-    updateThemeIcon();
-}
-
-function updateThemeIcon() {
-    const icon = state.theme === 'light' ? '🌙' : '☀️';
-    elements.themeToggle.querySelector('.theme-icon').textContent = icon;
-}
 
 function switchView(viewName) {
     state.currentView = viewName;
@@ -417,6 +576,12 @@ function switchView(viewName) {
     } else if (viewName === 'history') {
         // 切换到翻译历史视图时加载历史记录
         loadTranslationHistory();
+    } else if (viewName === 'admin') {
+        // 切换到用户管理视图时加载用户数据
+        loadPendingUsersView();
+    } else if (viewName === 'stats') {
+        // 切换到统计面板视图时加载统计数据
+        loadStatsView();
     }
 }
 
@@ -707,13 +872,24 @@ function renderTerms(terms) {
             return;
         }
 
-        elements.termsList.innerHTML = filteredTerms.map(term => `
-            <div class="term-item" data-source="${escapeHtml(term.source)}">
+        elements.termsList.innerHTML = filteredTerms.map(term => {
+            // 检查是否有多译词（用 | 分隔）
+            const translations = term.target.split('|').map(t => t.trim()).filter(t => t);
+            const hasMultiple = translations.length > 1;
+
+            return `
+            <div class="term-item ${hasMultiple ? 'term-multiple' : ''}" data-source="${escapeHtml(term.source)}">
                 <div class="term-header">
                     <div class="term-main">
                         <span class="term-english">${escapeHtml(term.source)}</span>
                         <span class="term-arrow">→</span>
-                        <span class="term-chinese">${escapeHtml(term.target)}</span>
+                        ${hasMultiple ? `
+                            <div class="term-translations-list">
+                                ${translations.map((trans, idx) => `
+                                    <span class="term-chinese ${idx === 0 ? 'term-primary' : ''}">${escapeHtml(trans)}</span>
+                                `).join('<span class="term-separator">|</span>')}
+                            </div>
+                        ` : `<span class="term-chinese">${escapeHtml(term.target)}</span>`}
                     </div>
                     <div class="term-actions">
                         <button class="term-btn" onclick="editTerm('${escapeHtml(term.source)}')">编辑</button>
@@ -728,7 +904,7 @@ function renderTerms(terms) {
                 ` : ''}
                 ${term.notes ? `<div class="term-notes">${escapeHtml(term.notes)}</div>` : ''}
             </div>
-        `).join('');
+        `}).join('');
 }
 
 async function loadCategories() {
@@ -1413,7 +1589,10 @@ async function translateText() {
                 'Content-Type': 'application/json',
                 'X-User-ID': state.user.id
             },
-            body: JSON.stringify({ text })
+            body: JSON.stringify({ 
+                text,
+                direction: state.translationDirection || 'en2zh'
+            })
         });
         
         const data = await response.json();
@@ -1778,16 +1957,21 @@ async function translateFile() {
         
         // 构建请求体，使用数字索引
         const indexMapping = {}; // 用于映射数字索引到原始索引
-        const requestBody = { 
+        // 获取文件扩展名用于领域预设
+        const fileExt = state.originalFilename ? state.originalFilename.split('.').pop().toLowerCase() : '';
+
+        const requestBody = {
             texts: batch.map((b, i) => {
                 const numericIndex = i; // 使用简单的数字索引
                 indexMapping[numericIndex] = b.index; // 保存映射关系
-                return { 
-                    index: numericIndex, 
-                    text: b.text 
+                return {
+                    index: numericIndex,
+                    text: b.text
                 };
             }),
-            start_index: 0 // 新增：起始索引偏移
+            start_index: 0, // 新增：起始索引偏移
+            direction: state.translationDirection || 'en2zh', // 翻译方向：en2zh 或 zh2en
+            file_type: fileExt // 文件类型，用于术语领域预设
         };
         console.log('[LLM链路] 索引映射:', indexMapping);
         console.log('[LLM链路] 请求体大小:', JSON.stringify(requestBody).length, '字符');
@@ -1994,13 +2178,27 @@ function updateUserUI() {
     if (state.user) {
         elements.userInfo.style.display = 'flex';
         elements.userName.textContent = state.user.username;
-        elements.userRole.textContent = state.user.role === 'admin' ? '管理员' : '用户';
+        elements.userRole.textContent = getRoleText(state.user.role);
+
+        // 显示邮箱（如果有）
+        if (state.user.email) {
+            elements.userEmail.textContent = state.user.email;
+            elements.userEmail.style.display = 'block';
+        } else {
+            elements.userEmail.style.display = 'none';
+        }
+
         elements.loginBtn.textContent = '退出';
         elements.loginBtn.onclick = logout;
 
-        // 如果是管理员，显示管理入口
-        if (state.user.role === 'admin' || state.user.role === 'manager') {
-            addAdminMenuItem();
+        // 根据角色显示对应的管理入口
+        // admin: 显示用户管理和统计面板
+        // manager: 只显示统计面板
+        // user: 不显示系统管理
+        if (state.user.role === 'admin') {
+            addAdminMenuItem(true); // true = 显示用户管理
+        } else if (state.user.role === 'manager') {
+            addAdminMenuItem(false); // false = 只显示统计面板
         }
     } else {
         elements.userInfo.style.display = 'none';
@@ -2010,21 +2208,44 @@ function updateUserUI() {
     }
 }
 
-function addAdminMenuItem() {
-    if (document.querySelector('.nav-item[data-view="admin"]')) return;
+function addAdminMenuItem(showUserManagement = true) {
+    const adminNavSection = document.getElementById('adminNavSection');
+    const adminNavItem = document.getElementById('adminNavItem');
+    const statsNavItem = document.getElementById('statsNavItem');
+    const dataManageNavSection = document.getElementById('dataManageNavSection');
 
-    const navSection = document.querySelector('.nav-section:last-child');
-    const adminBtn = document.createElement('button');
-    adminBtn.className = 'nav-item';
-    adminBtn.dataset.view = 'admin';
-    adminBtn.innerHTML = '<span>用户管理</span>';
-    adminBtn.addEventListener('click', () => showAdminModal());
-    navSection.appendChild(adminBtn);
+    if (adminNavSection) {
+        adminNavSection.style.display = 'block';
+    }
+
+    // 控制用户管理菜单项显示/隐藏
+    if (adminNavItem) {
+        adminNavItem.style.display = showUserManagement ? 'flex' : 'none';
+    }
+
+    // 统计面板始终显示（对于admin和manager）
+    if (statsNavItem) {
+        statsNavItem.style.display = 'flex';
+    }
+
+    // 数据管理菜单（术语提炼、记忆管理）对admin和manager显示
+    if (dataManageNavSection) {
+        dataManageNavSection.style.display = 'block';
+    }
 }
 
 function removeAdminMenuItem() {
-    const adminItem = document.querySelector('.nav-item[data-view="admin"]');
-    if (adminItem) adminItem.remove();
+    const adminNavSection = document.getElementById('adminNavSection');
+    const dataManageNavSection = document.getElementById('dataManageNavSection');
+
+    if (adminNavSection) {
+        adminNavSection.style.display = 'none';
+    }
+
+    // 隐藏数据管理菜单
+    if (dataManageNavSection) {
+        dataManageNavSection.style.display = 'none';
+    }
 }
 
 function showAuthModal(force = false) {
@@ -2145,6 +2366,114 @@ function logout() {
 }
 
 // ========================================
+// 个人设置功能
+// ========================================
+
+function bindUserSettingsEvents() {
+    // 打开设置弹窗
+    elements.userSettingsBtn?.addEventListener('click', showUserSettingsModal);
+
+    // 关闭设置弹窗
+    document.getElementById('closeUserSettingsBtn')?.addEventListener('click', closeUserSettingsModal);
+    document.getElementById('cancelUserSettingsBtn')?.addEventListener('click', closeUserSettingsModal);
+
+    // 点击遮罩关闭
+    document.getElementById('userSettingsModal')?.addEventListener('click', (e) => {
+        if (e.target.id === 'userSettingsModal') {
+            closeUserSettingsModal();
+        }
+    });
+
+    // 保存设置
+    document.getElementById('saveUserSettingsBtn')?.addEventListener('click', saveUserSettings);
+}
+
+function showUserSettingsModal() {
+    if (!state.user) {
+        showToast('请先登录');
+        return;
+    }
+
+    const modal = document.getElementById('userSettingsModal');
+
+    // 填充当前用户信息
+    document.getElementById('settingsUsername').textContent = state.user.username;
+    document.getElementById('settingsCurrentEmail').textContent = state.user.email || '未设置邮箱';
+
+    // 清空输入框
+    document.getElementById('settingsNewEmail').value = '';
+    document.getElementById('settingsOldPassword').value = '';
+    document.getElementById('settingsNewPassword').value = '';
+    document.getElementById('settingsConfirmPassword').value = '';
+
+    modal.style.display = 'flex';
+}
+
+function closeUserSettingsModal() {
+    document.getElementById('userSettingsModal').style.display = 'none';
+}
+
+async function saveUserSettings() {
+    const newEmail = document.getElementById('settingsNewEmail').value.trim();
+    const oldPassword = document.getElementById('settingsOldPassword').value;
+    const newPassword = document.getElementById('settingsNewPassword').value;
+    const confirmPassword = document.getElementById('settingsConfirmPassword').value;
+
+    // 验证旧密码
+    if (!oldPassword) {
+        showToast('请输入当前密码以验证身份');
+        return;
+    }
+
+    // 验证新密码一致性
+    if (newPassword && newPassword !== confirmPassword) {
+        showToast('新密码与确认密码不一致');
+        return;
+    }
+
+    // 检查是否有修改
+    if (!newEmail && !newPassword) {
+        showToast('没有需要保存的修改');
+        return;
+    }
+
+    try {
+        const response = await fetch('/api/user/settings', {
+            method: 'PUT',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-User-ID': state.user.id
+            },
+            body: JSON.stringify({
+                old_password: oldPassword,
+                new_email: newEmail || null,
+                new_password: newPassword || null
+            })
+        });
+
+        const data = await response.json();
+
+        if (data.success) {
+            // 更新本地用户信息
+            if (newEmail) {
+                state.user.email = newEmail;
+            }
+            localStorage.setItem('user', JSON.stringify(state.user));
+
+            // 更新UI
+            updateUserUI();
+            closeUserSettingsModal();
+            showToast('个人设置已保存');
+        } else {
+            showToast(data.error || '保存失败');
+        }
+    } catch (error) {
+        console.error('保存个人设置失败:', error);
+        showToast('保存失败，请重试');
+    }
+}
+
+// ========================================
 // 管理员功能
 // ========================================
 
@@ -2257,7 +2586,7 @@ function renderAllUsers(users) {
                 <span class="user-email">${escapeHtml(user.email || '无邮箱')}</span>
                 <span class="user-status">
                     <span class="user-status-badge ${user.status}">${statusMap[user.status] || user.status}</span>
-                    ${user.role === 'admin' ? '<span class="user-status-badge" style="background: var(--accent-color);">管理员</span>' : ''}
+                    ${user.role !== 'user' ? `<span class="user-status-badge" style="background: var(--accent-color);">${getRoleText(user.role)}</span>` : ''}
                 </span>
             </div>
             <div class="user-actions">
@@ -2265,7 +2594,7 @@ function renderAllUsers(users) {
                     <button class="btn btn-small btn-primary" onclick="approveUser(${user.id})">通过</button>
                     <button class="btn btn-small btn-outline" onclick="rejectUser(${user.id})">拒绝</button>
                 ` : ''}
-                ${user.status === 'approved' && user.role !== 'admin' ? `
+                ${user.status === 'approved' && user.id !== state.user.id && user.username !== 'admin' ? `
                     <button class="btn btn-small btn-outline" onclick="disableUser(${user.id})">禁用</button>
                 ` : ''}
             </div>
@@ -2341,7 +2670,7 @@ window.disableUser = async function(userId) {
         const data = await response.json();
         if (data.success) {
             showToast('已禁用用户');
-            loadAllUsers();
+            loadAllUsersView();
         } else {
             showToast(data.message || '操作失败');
         }
@@ -2349,6 +2678,642 @@ window.disableUser = async function(userId) {
         showToast('操作失败');
     }
 };
+
+// ========================================
+// 用户管理页面功能
+// ========================================
+
+function switchAdminViewTab(tab) {
+    document.querySelectorAll('.admin-view-tab').forEach(t => t.classList.remove('active'));
+    document.querySelector(`.admin-view-tab[data-tab="${tab}"]`).classList.add('active');
+
+    // 隐藏所有面板
+    document.getElementById('pendingViewPanel').style.display = 'none';
+    document.getElementById('allUsersViewPanel').style.display = 'none';
+
+    if (tab === 'pending') {
+        document.getElementById('pendingViewPanel').style.display = 'block';
+        loadPendingUsersView();
+    } else if (tab === 'all') {
+        document.getElementById('allUsersViewPanel').style.display = 'block';
+        loadAllUsersView();
+    }
+}
+
+async function loadPendingUsersView() {
+    const tbody = document.getElementById('pendingUsersBody');
+    const emptyState = document.getElementById('pendingEmpty');
+    tbody.innerHTML = '<tr><td colspan="4" class="empty-state">加载中...</td></tr>';
+    emptyState.style.display = 'none';
+
+    try {
+        const response = await fetch('/api/admin/users/pending', {
+            headers: { 'X-User-ID': state.user.id }
+        });
+        const data = await response.json();
+
+        if (data.success) {
+            renderPendingUsersView(data.users);
+        } else {
+            tbody.innerHTML = `<tr><td colspan="4" class="empty-state">${data.error || '加载失败'}</td></tr>`;
+        }
+    } catch (error) {
+        tbody.innerHTML = '<tr><td colspan="4" class="empty-state">加载失败</td></tr>';
+    }
+}
+
+function renderPendingUsersView(users) {
+    const tbody = document.getElementById('pendingUsersBody');
+    const emptyState = document.getElementById('pendingEmpty');
+
+    if (users.length === 0) {
+        tbody.innerHTML = '';
+        emptyState.style.display = 'block';
+        return;
+    }
+
+    emptyState.style.display = 'none';
+    tbody.innerHTML = users.map(user => `
+        <tr>
+            <td>${escapeHtml(user.username)}</td>
+            <td>${escapeHtml(user.email || '-')}</td>
+            <td>${new Date(user.created_at).toLocaleString()}</td>
+            <td>
+                <button class="user-action-btn approve" onclick="approveUserView(${user.id})">通过</button>
+                <button class="user-action-btn reject" onclick="rejectUserView(${user.id})">拒绝</button>
+            </td>
+        </tr>
+    `).join('');
+}
+
+async function loadAllUsersView() {
+    const tbody = document.getElementById('allUsersBody');
+    tbody.innerHTML = '<tr><td colspan="6" class="empty-state">加载中...</td></tr>';
+
+    try {
+        const response = await fetch('/api/admin/users', {
+            headers: { 'X-User-ID': state.user.id }
+        });
+        const data = await response.json();
+
+        if (data.success) {
+            renderAllUsersView(data.users);
+        } else {
+            tbody.innerHTML = `<tr><td colspan="6" class="empty-state">${data.error || '加载失败'}</td></tr>`;
+        }
+    } catch (error) {
+        tbody.innerHTML = '<tr><td colspan="6" class="empty-state">加载失败</td></tr>';
+    }
+}
+
+function renderAllUsersView(users) {
+    const tbody = document.getElementById('allUsersBody');
+
+    if (users.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="6" class="empty-state">暂无用户</td></tr>';
+        return;
+    }
+
+    const statusMap = {
+        'approved': '已通过',
+        'pending': '待审批',
+        'rejected': '已拒绝',
+        'disabled': '已禁用'
+    };
+
+    tbody.innerHTML = users.map(user => `
+        <tr>
+            <td>${escapeHtml(user.username)}</td>
+            <td>${escapeHtml(user.email || '-')}</td>
+            <td><span class="user-role-badge ${user.role}">${getRoleText(user.role)}</span></td>
+            <td><span class="user-status-badge ${user.status}">${statusMap[user.status] || user.status}</span></td>
+            <td>${new Date(user.created_at).toLocaleString()}</td>
+            <td class="user-actions-cell">
+                ${user.status === 'pending' ? `
+                    <button class="user-action-btn approve" onclick="approveUserView(${user.id})">通过</button>
+                    <button class="user-action-btn reject" onclick="rejectUserView(${user.id})">拒绝</button>
+                ` : ''}
+                ${user.status !== 'pending' ? `
+                    <button class="user-action-btn edit" onclick="editUserView(${user.id}, '${escapeHtml(user.username)}', '${escapeHtml(user.email || '')}', '${user.role}')">编辑</button>
+                    ${user.id !== state.user.id && user.username !== 'admin' ? `
+                        <button class="user-action-btn ${user.status === 'disabled' ? 'enable' : 'disable'}" onclick="${user.status === 'disabled' ? 'enableUserView' : 'disableUserView'}(${user.id})">${user.status === 'disabled' ? '启用' : '禁用'}</button>
+                    ` : ''}
+                ` : ''}
+            </td>
+        </tr>
+    `).join('');
+}
+
+window.approveUserView = async function(userId) {
+    try {
+        const response = await fetch(`/api/admin/users/${userId}/approve`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-User-ID': state.user.id
+            },
+            body: JSON.stringify({})
+        });
+
+        const data = await response.json();
+        if (data.success) {
+            showToast('审批通过');
+            loadPendingUsersView();
+            loadAllUsersView();
+        } else {
+            showToast(data.message || '操作失败');
+        }
+    } catch (error) {
+        showToast('操作失败');
+    }
+};
+
+window.rejectUserView = async function(userId) {
+    const reason = prompt('请输入拒绝原因（可选）:');
+    if (reason === null) return;
+
+    try {
+        const response = await fetch(`/api/admin/users/${userId}/reject`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-User-ID': state.user.id
+            },
+            body: JSON.stringify({ reason })
+        });
+
+        const data = await response.json();
+        if (data.success) {
+            showToast('已拒绝用户');
+            loadPendingUsersView();
+            loadAllUsersView();
+        } else {
+            showToast(data.message || '操作失败');
+        }
+    } catch (error) {
+        showToast('操作失败');
+    }
+};
+
+window.disableUserView = async function(userId) {
+    const reason = prompt('请输入禁用原因（可选）:');
+    if (reason === null) return;
+
+    try {
+        const response = await fetch(`/api/admin/users/${userId}/disable`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-User-ID': state.user.id
+            },
+            body: JSON.stringify({ reason })
+        });
+
+        const data = await response.json();
+        if (data.success) {
+            showToast('已禁用用户');
+            loadAllUsersView();
+        } else {
+            showToast(data.message || '操作失败');
+        }
+    } catch (error) {
+        showToast('操作失败');
+    }
+};
+
+// 启用用户
+window.enableUserView = async function(userId) {
+    try {
+        const response = await fetch(`/api/admin/users/${userId}/enable`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-User-ID': state.user.id
+            },
+            body: JSON.stringify({})
+        });
+
+        const data = await response.json();
+        if (data.success) {
+            showToast('已启用用户');
+            loadAllUsersView();
+        } else {
+            showToast(data.message || '操作失败');
+        }
+    } catch (error) {
+        showToast('操作失败');
+    }
+};
+
+// 编辑用户弹窗相关变量
+let currentEditUserId = null;
+
+// 打开编辑用户弹窗
+window.editUserView = function(userId, username, email, role) {
+    currentEditUserId = userId;
+    document.getElementById('editUsername').textContent = username;
+    document.getElementById('editEmail').value = email || '';
+    document.getElementById('editRole').value = role;
+    document.getElementById('editPassword').value = '';
+    document.getElementById('editUserModal').style.display = 'flex';
+};
+
+// 关闭编辑用户弹窗
+function closeEditUserModal() {
+    document.getElementById('editUserModal').style.display = 'none';
+    currentEditUserId = null;
+}
+
+// 保存用户编辑
+async function saveUserEdit(e) {
+    e.preventDefault();
+    if (!currentEditUserId) return;
+
+    const email = document.getElementById('editEmail').value.trim();
+    const role = document.getElementById('editRole').value;
+    const password = document.getElementById('editPassword').value;
+
+    const body = { email, role };
+    if (password) {
+        body.password = password;
+    }
+
+    try {
+        const response = await fetch(`/api/admin/users/${currentEditUserId}`, {
+            method: 'PUT',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-User-ID': state.user.id
+            },
+            body: JSON.stringify(body)
+        });
+
+        const data = await response.json();
+        if (data.success) {
+            showToast('用户修改已保存');
+            closeEditUserModal();
+            loadAllUsersView();
+        } else {
+            showToast(data.message || '保存失败');
+        }
+    } catch (error) {
+        showToast('保存失败');
+    }
+}
+
+// ========================================
+// 统计面板功能
+// ========================================
+
+let statsChart = null;
+let currentStatsType = 'users';
+let currentStatsPage = 1;
+let currentStatsDays = 7;
+
+async function loadStatsView() {
+    await loadStatsOverview();
+    await loadStatsTrend();
+    await loadStatsDetail();
+    initStatsEventListeners();
+}
+
+async function loadStatsOverview() {
+    try {
+        const response = await fetch('/api/admin/stats/overview', {
+            headers: { 'X-User-ID': state.user.id }
+        });
+        const data = await response.json();
+
+        if (data.success) {
+            const stats = data.data;
+
+            // 更新概览卡片
+            document.getElementById('statsTotalUsers').textContent = stats.users.total;
+            document.getElementById('statsUsersTrend').textContent = `今日 +${stats.users.new_today}`;
+
+            document.getElementById('statsTotalFiles').textContent = stats.files.total;
+            document.getElementById('statsFilesTrend').textContent = `今日 +${stats.files.today}`;
+
+            document.getElementById('statsTotalTerms').textContent = stats.terms.total;
+            document.getElementById('statsTermsTrend').textContent = `分类 ${stats.terms.categories}`;
+
+            document.getElementById('statsTotalLLM').textContent = stats.llm.total_calls;
+            document.getElementById('statsLLMTrend').textContent = `今日 +${stats.llm.today_calls}`;
+        }
+    } catch (error) {
+        console.error('加载统计概览失败:', error);
+    }
+}
+
+async function loadStatsTrend() {
+    try {
+        const response = await fetch(
+            `/api/admin/stats/trend?days=${currentStatsDays}&metrics=files&metrics=llm_calls`,
+            { headers: { 'X-User-ID': state.user.id } }
+        );
+        const data = await response.json();
+
+        if (data.success) {
+            renderStatsChart(data.data);
+        }
+    } catch (error) {
+        console.error('加载趋势数据失败:', error);
+    }
+}
+
+function renderStatsChart(chartData) {
+    const ctx = document.getElementById('statsTrendChart');
+    if (!ctx) return;
+
+    if (statsChart) {
+        statsChart.destroy();
+    }
+
+    // 使用系统CSS变量定义的颜色
+    const colors = {
+        files: '#3b82f6',      // 品牌蓝
+        llm_calls: '#9b59b6'   // 辅助紫
+    };
+
+    const datasets = chartData.series.map(series => ({
+        label: series.name,
+        data: series.data,
+        borderColor: series.name.includes('文件') ? colors.files : colors.llm_calls,
+        backgroundColor: series.name.includes('文件')
+            ? 'rgba(59, 130, 246, 0.08)'
+            : 'rgba(155, 89, 182, 0.08)',
+        borderWidth: 2,
+        fill: true,
+        tension: 0.4,
+        pointRadius: 0,
+        pointHoverRadius: 4,
+        pointHoverBackgroundColor: series.name.includes('文件') ? colors.files : colors.llm_calls,
+        pointHoverBorderColor: '#18181b',
+        pointHoverBorderWidth: 2
+    }));
+
+    statsChart = new Chart(ctx, {
+        type: 'line',
+        data: {
+            labels: chartData.dates,
+            datasets: datasets
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            interaction: {
+                intersect: false,
+                mode: 'index'
+            },
+            plugins: {
+                legend: {
+                    display: true,
+                    position: 'top',
+                    align: 'end',
+                    labels: {
+                        color: '#a1a1aa',
+                        usePointStyle: true,
+                        pointStyle: 'circle',
+                        padding: 16,
+                        font: {
+                            size: 12
+                        }
+                    }
+                },
+                tooltip: {
+                    backgroundColor: '#202024',
+                    titleColor: '#e4e4e7',
+                    bodyColor: '#a1a1aa',
+                    borderColor: '#27272a',
+                    borderWidth: 1,
+                    padding: 12,
+                    displayColors: true,
+                    cornerRadius: 6,
+                    titleFont: {
+                        size: 13,
+                        weight: '500'
+                    },
+                    bodyFont: {
+                        size: 12
+                    }
+                }
+            },
+            scales: {
+                x: {
+                    grid: {
+                        color: 'rgba(39, 39, 42, 0.5)',
+                        drawBorder: false,
+                        tickLength: 0
+                    },
+                    ticks: {
+                        color: '#71717a',
+                        font: {
+                            size: 11
+                        },
+                        padding: 8
+                    }
+                },
+                y: {
+                    grid: {
+                        color: 'rgba(39, 39, 42, 0.5)',
+                        drawBorder: false,
+                        tickLength: 0
+                    },
+                    ticks: {
+                        color: '#71717a',
+                        font: {
+                            size: 11
+                        },
+                        padding: 8
+                    },
+                    beginAtZero: true
+                }
+            }
+        }
+    });
+}
+
+async function loadStatsDetail() {
+    try {
+        const response = await fetch(
+            `/api/admin/stats/detail?type=${currentStatsType}&page=${currentStatsPage}&limit=10`,
+            { headers: { 'X-User-ID': state.user.id } }
+        );
+        const data = await response.json();
+
+        if (data.success) {
+            renderStatsDetailTable(data.data);
+        }
+    } catch (error) {
+        console.error('加载详细统计失败:', error);
+    }
+}
+
+function renderStatsDetailTable(data) {
+    const thead = document.getElementById('statsDetailHead');
+    const tbody = document.getElementById('statsDetailBody');
+
+    // 根据类型设置表头
+    if (currentStatsType === 'users') {
+        thead.innerHTML = `
+            <tr>
+                <th>排名</th>
+                <th>用户名</th>
+                <th>角色</th>
+                <th>状态</th>
+                <th>翻译文件</th>
+                <th>注册时间</th>
+            </tr>
+        `;
+        tbody.innerHTML = data.items.map((item, index) => `
+            <tr>
+                <td>${(currentStatsPage - 1) * 10 + index + 1}</td>
+                <td>${escapeHtml(item.username)}</td>
+                <td>${getRoleText(item.role)}</td>
+                <td>${getStatusText(item.status)}</td>
+                <td>${item.file_count}</td>
+                <td>${formatDate(item.created_at)}</td>
+            </tr>
+        `).join('');
+    } else if (currentStatsType === 'files') {
+        thead.innerHTML = `
+            <tr>
+                <th>ID</th>
+                <th>用户</th>
+                <th>文件名</th>
+                <th>状态</th>
+                <th>时间</th>
+            </tr>
+        `;
+        tbody.innerHTML = data.items.map(item => `
+            <tr>
+                <td>${item.id}</td>
+                <td>${escapeHtml(item.username)}</td>
+                <td>${escapeHtml(item.original_filename)}</td>
+                <td>${getTranslationStatusText(item.status)}</td>
+                <td>${formatDate(item.created_at)}</td>
+            </tr>
+        `).join('');
+    } else if (currentStatsType === 'llm') {
+        thead.innerHTML = `
+            <tr>
+                <th>ID</th>
+                <th>用户</th>
+                <th>操作类型</th>
+                <th>模型</th>
+                <th>Tokens</th>
+                <th>响应时间</th>
+                <th>状态</th>
+                <th>时间</th>
+            </tr>
+        `;
+        tbody.innerHTML = data.items.map(item => `
+            <tr>
+                <td>${item.id}</td>
+                <td>${escapeHtml(item.username || '系统')}</td>
+                <td>${getOperationTypeText(item.operation_type)}</td>
+                <td>${item.model_name}</td>
+                <td>${item.total_tokens}</td>
+                <td>${item.response_time_ms}ms</td>
+                <td>${item.status === 'success' ? '成功' : '失败'}</td>
+                <td>${formatDate(item.created_at)}</td>
+            </tr>
+        `).join('');
+    }
+
+    // 渲染分页
+    renderStatsPagination(data.total);
+}
+
+function renderStatsPagination(total) {
+    const totalPages = Math.ceil(total / 10);
+    const pagination = document.getElementById('statsPagination');
+
+    let html = '';
+
+    // 上一页
+    html += `<button class="stats-page-btn" ${currentStatsPage === 1 ? 'disabled' : ''} onclick="changeStatsPage(${currentStatsPage - 1})">上一页</button>`;
+
+    // 页码
+    for (let i = 1; i <= totalPages; i++) {
+        if (i === 1 || i === totalPages || (i >= currentStatsPage - 1 && i <= currentStatsPage + 1)) {
+            html += `<button class="stats-page-btn ${i === currentStatsPage ? 'active' : ''}" onclick="changeStatsPage(${i})">${i}</button>`;
+        } else if (i === currentStatsPage - 2 || i === currentStatsPage + 2) {
+            html += `<span class="stats-page-btn" disabled>...</span>`;
+        }
+    }
+
+    // 下一页
+    html += `<button class="stats-page-btn" ${currentStatsPage === totalPages ? 'disabled' : ''} onclick="changeStatsPage(${currentStatsPage + 1})">下一页</button>`;
+
+    pagination.innerHTML = html;
+}
+
+window.changeStatsPage = function(page) {
+    currentStatsPage = page;
+    loadStatsDetail();
+};
+
+function initStatsEventListeners() {
+    // 时间筛选器 - 使用新的分段控制器类名
+    document.querySelectorAll('.stats-segment').forEach(btn => {
+        btn.addEventListener('click', () => {
+            document.querySelectorAll('.stats-segment').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            currentStatsDays = parseInt(btn.dataset.days);
+            loadStatsTrend();
+        });
+    });
+
+    // 详细数据类型切换 - 使用新的标签页类名
+    document.querySelectorAll('.stats-tab').forEach(tab => {
+        tab.addEventListener('click', () => {
+            document.querySelectorAll('.stats-tab').forEach(t => t.classList.remove('active'));
+            tab.classList.add('active');
+            currentStatsType = tab.dataset.type;
+            currentStatsPage = 1;
+            loadStatsDetail();
+        });
+    });
+}
+
+function getStatusText(status) {
+    const statusMap = {
+        'approved': '已通过',
+        'pending': '待审批',
+        'rejected': '已拒绝',
+        'disabled': '已禁用'
+    };
+    return statusMap[status] || status;
+}
+
+function getRoleText(role) {
+    const roleMap = {
+        'admin': '管理员',
+        'manager': '主管',
+        'user': '用户'
+    };
+    return roleMap[role] || role;
+}
+
+function getTranslationStatusText(status) {
+    const statusMap = {
+        'completed': '已完成',
+        'processing': '处理中',
+        'failed': '失败'
+    };
+    return statusMap[status] || status;
+}
+
+function getOperationTypeText(type) {
+    const typeMap = {
+        'translate': '翻译',
+        'extract_terms': '术语提取',
+        'analyze': '分析',
+        'batch_translate': '批量翻译'
+    };
+    return typeMap[type] || type;
+}
 
 // ========================================
 // 翻译历史记录功能
@@ -2387,10 +3352,8 @@ async function loadTranslationHistory() {
             state.historyTotal = data.data.total;
             renderHistoryList(data.data);
 
-            // 如果是管理员，加载用户列表
-            if (state.user?.role === 'admin') {
-                loadUserFilterOptions(data.data.items);
-            }
+            // 加载用户筛选选项（所有用户都可以使用）
+            loadUserFilterOptions(data.data.items);
         } else {
             console.error('加载历史记录失败:', data.error);
         }
@@ -2399,7 +3362,7 @@ async function loadTranslationHistory() {
     }
 }
 
-// 加载用户筛选选项（管理员）
+// 加载用户筛选选项（所有用户）
 function loadUserFilterOptions(items) {
     const userFilter = document.getElementById('historyUserFilter');
     if (!userFilter) return;
@@ -2457,29 +3420,32 @@ function renderHistoryList(data) {
         const icon = fileIcons[item.file_type] || '📄';
         const status = statusMap[item.status] || { text: item.status, class: '' };
         const fileSize = formatFileSize(item.file_size);
-        const date = new Date(item.created_at).toLocaleString('zh-CN');
+        const date = new Date(item.created_at).toLocaleDateString('zh-CN');
+        const time = new Date(item.created_at).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
         const modeText = item.mode === 'bilingual' ? '双语' : '译文';
 
         return `
             <div class="history-item">
-                <div class="history-icon ${item.file_type}">${icon}</div>
+                <div class="history-icon">${icon}</div>
                 <div class="history-content">
                     <div class="history-filename">${escapeHtml(item.original_filename)}</div>
                     <div class="history-summary">${escapeHtml(item.summary || '无摘要')}</div>
                     <div class="history-meta">
-                        <span>👤 ${escapeHtml(item.username)}</span>
-                        <span>📅 ${date}</span>
-                        <span>📦 ${fileSize}</span>
-                        <span>📝 ${item.block_count || 0} 块</span>
-                        <span>🔤 ${modeText}</span>
+                        <span>${escapeHtml(item.username)}</span>
+                        <span>${date} ${time}</span>
+                        <span>${fileSize}</span>
+                        <span>${item.block_count || 0} 块</span>
+                        <span>${modeText}</span>
                     </div>
                 </div>
                 <div class="history-status ${status.class}">${status.text}</div>
                 <div class="history-actions">
                     ${item.status === 'completed' ? `
-                        <button class="btn btn-primary" onclick="downloadHistoryFile('${item.output_filename}')">下载</button>
+                        <button class="btn-download" onclick="downloadHistoryFile('${item.output_filename}')">下载</button>
                     ` : ''}
-                    <button class="btn btn-ghost" onclick="deleteHistoryRecord(${item.id})">删除</button>
+                    <button class="btn-delete" onclick="deleteHistoryRecord(${item.id})" title="删除" ${state.user?.role !== 'admin' ? 'disabled' : ''}>
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"></path></svg>
+                    </button>
                 </div>
             </div>
         `;
