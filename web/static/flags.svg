@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" style="display: none;">
+  <!-- 美国国旗 -->
+  <symbol id="flag-us" viewBox="0 0 36 36">
+    <path fill="#B22234" d="M36 27a4 4 0 0 1-4 4H4a4 4 0 0 1-4-4V9a4 4 0 0 1 4-4h28a4 4 0 0 1 4 4v18z"/>
+    <path fill="#FFF" d="M0 10h36v2H0zm0 4h36v2H0zm0 4h36v2H0zm0 4h36v2H0z"/>
+    <path fill="#3C3B6E" d="M0 9h15v15H0z"/>
+    <path fill="#FFF" d="M2 10h1v1H2zm2 0h1v1H4zm2 0h1v1H6zm2 0h1v1H8zm2 0h1v1h-1zm2 0h1v1h-1zm-9 2h1v1H3zm2 0h1v1H5zm2 0h1v1H7zm2 0h1v1H9zm2 0h1v1h-1zm2 0h1v1h-1zm-9 2h1v1H2zm2 0h1v1H4zm2 0h1v1H6zm2 0h1v1H8zm2 0h1v1h-1zm2 0h1v1h-1zm-9 2h1v1H3zm2 0h1v1H5zm2 0h1v1H7zm2 0h1v1H9zm2 0h1v1h-1zm2 0h1v1h-1zm-9 2h1v1H2zm2 0h1v1H4zm2 0h1v1H6zm2 0h1v1H8zm2 0h1v1h-1zm2 0h1v1h-1z"/>
+  </symbol>
+
+  <!-- 中国国旗 -->
+  <symbol id="flag-cn" viewBox="0 0 36 36">
+    <path fill="#DE2910" d="M36 27a4 4 0 0 1-4 4H4a4 4 0 0 1-4-4V9a4 4 0 0 1 4-4h28a4 4 0 0 1 4 4v18z"/>
+    <path fill="#FFDE00" d="M8 8l1.5 4.5h4.5L10 15l1.5 4.5L8 17l-3.5 2.5L6 15 2.5 12.5h4.5z"/>
+    <path fill="#FFDE00" d="M14 5l.5 1.5h1.5L15 7l.5 1.5L14 8l-1.5 1L13 7.5 11.5 6.5h1.5z"/>
+    <path fill="#FFDE00" d="M17 8l.5 1.5h1.5L18 10l.5 1.5L17 10.5l-1.5 1L16.5 9 15 8h1.5z"/>
+    <path fill="#FFDE00" d="M17 12l.5 1.5h1.5L18 14l.5 1.5L17 14.5l-1.5 1L16.5 13 15 12h1.5z"/>
+    <path fill="#FFDE00" d="M14 15l.5 1.5h1.5L15 17l.5 1.5L14 17.5l-1.5 1L13 16.5 11.5 15.5h1.5z"/>
+  </symbol>
+</svg>

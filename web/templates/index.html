@@ -6,46 +6,100 @@
     <title>TransGuide - 智能翻译</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🌐</text></svg>">
+    <!-- SVG 国旗图标 -->
+    <object type="image/svg+xml" data="{{ url_for('static', filename='flags.svg') }}" style="display: none;"></object>
 </head>
 <body>
     <div class="app">
         <!-- 左侧边栏 -->
         <aside class="sidebar">
+            <!-- 顶部品牌区 -->
             <div class="sidebar-header">
                 <h1 class="logo">TransGuide</h1>
-                <button class="theme-toggle" id="themeToggle" title="切换主题">
-                    <span class="theme-icon">🌙</span>
-                </button>
             </div>
             
+            <!-- 导航分组区 -->
             <nav class="nav">
+                <!-- 翻译功能 -->
                 <div class="nav-section">
-                    <span class="nav-label">翻译</span>
+                    <span class="nav-label">翻译功能</span>
                     <button class="nav-item active" data-view="translate">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M4 7V4h3M4 17v3h3M20 7V4h-3M20 17v3h-3M9 9h6v6H9z"/>
+                        </svg>
                         <span>文本翻译</span>
                     </button>
                     <button class="nav-item" data-view="files">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                            <polyline points="14 2 14 8 20 8"/>
+                        </svg>
                         <span>文件翻译</span>
                     </button>
                     <button class="nav-item" data-view="history">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <circle cx="12" cy="12" r="10"/>
+                            <polyline points="12 6 12 12 16 14"/>
+                        </svg>
                         <span>翻译历史</span>
                     </button>
                 </div>
                 
-                <div class="nav-section">
-                    <span class="nav-label">知识库</span>
+                <!-- 数据管理 - 仅管理员和主管可见 -->
+                <div class="nav-section" id="dataManageNavSection" style="display: none;">
+                    <span class="nav-label">数据管理</span>
                     <button class="nav-item" data-view="import">
-                        <span>导入历史文件</span>
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                            <polyline points="17 8 12 3 7 8"/>
+                            <line x1="12" y1="3" x2="12" y2="15"/>
+                        </svg>
+                        <span>术语提炼</span>
                     </button>
                     <button class="nav-item" data-view="terms">
-                        <span>术语库</span>
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                            <polyline points="14 2 14 8 20 8"/>
+                            <line x1="16" y1="13" x2="8" y2="13"/>
+                            <line x1="16" y1="17" x2="8" y2="17"/>
+                            <polyline points="10 9 9 9 8 9"/>
+                        </svg>
+                        <span>术语管理</span>
                     </button>
                     <button class="nav-item" data-view="memory">
-                        <span>翻译记忆</span>
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M12 2a10 10 0 1 0 10 10H12V2z"/>
+                            <path d="M12 2a10 10 0 0 1 10 10"/>
+                            <path d="M12 12L2.5 12"/>
+                        </svg>
+                        <span>记忆管理</span>
+                    </button>
+                </div>
+
+                <!-- 系统管理 -->
+                <div class="nav-section" id="adminNavSection" style="display: none;">
+                    <span class="nav-label">系统管理</span>
+                    <button class="nav-item" data-view="admin" id="adminNavItem">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
+                            <circle cx="9" cy="7" r="4"></circle>
+                            <path d="M23 21v-2a4 4 0 0 0-3-3.87"></path>
+                            <path d="M16 3.13a4 4 0 0 1 0 7.75"></path>
+                        </svg>
+                        <span>用户管理</span>
+                    </button>
+                    <button class="nav-item" data-view="stats" id="statsNavItem">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <line x1="18" y1="20" x2="18" y2="10"></line>
+                            <line x1="12" y1="20" x2="12" y2="4"></line>
+                            <line x1="6" y1="20" x2="6" y2="14"></line>
+                        </svg>
+                        <span>统计面板</span>
                     </button>
                 </div>
             </nav>
             
+            <!-- 数据统计模块 -->
             <div class="stats">
                 <div class="stat-item">
                     <span class="stat-value" id="termsCount">-</span>
@@ -57,13 +111,42 @@
                 </div>
             </div>
 
+            <!-- About 入口 -->
+            <button class="nav-item about-btn" id="aboutBtn">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="12" cy="12" r="10"></circle>
+                    <line x1="12" y1="16" x2="12" y2="12"></line>
+                    <line x1="12" y1="8" x2="12.01" y2="8"></line>
+                </svg>
+                <span>About</span>
+            </button>
+
             <!-- 用户信息区域 -->
             <div class="user-section" id="userSection">
                 <div class="user-info" id="userInfo" style="display: none;">
-                    <span class="user-name" id="userName"></span>
+                    <div class="user-info-main">
+                        <span class="user-name" id="userName"></span>
+                        <button class="user-settings-btn" id="userSettingsBtn" title="个人设置">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <circle cx="12" cy="12" r="3"/>
+                                <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+                            </svg>
+                        </button>
+                    </div>
                     <span class="user-role" id="userRole"></span>
+                    <span class="user-email" id="userEmail" style="display: none;"></span>
                 </div>
+                <button class="btn-logout" id="logoutBtn" style="display: none;">退出</button>
                 <button class="btn btn-small" id="loginBtn">登录</button>
+            </div>
+
+            <!-- 版本信息 -->
+            <div class="version-info" id="versionInfo">
+                <span>Frontend v2.2</span>
+                <span class="version-separator">•</span>
+                <span id="backendVersion">Backend v1.2.0</span>
+                <span class="version-separator">•</span>
+                <span>CSS v2.2</span>
             </div>
         </aside>
         
@@ -71,9 +154,11 @@
         <main class="main">
             <!-- 导入历史文件视图 -->
             <div class="view" id="importView">
-                <div class="view-header">
-                    <h2>导入历史翻译文件</h2>
-                    <p class="view-desc">上传历史双语文件，自动提取术语和翻译记忆</p>
+                <div class="page-header">
+                    <div class="page-header-content">
+                        <h2 class="page-title">术语提炼</h2>
+                        <p class="page-subtitle">上传历史双语文件，自动提取术语和翻译记忆</p>
+                    </div>
                 </div>
                 
                 <div class="import-container">
@@ -173,8 +258,11 @@
             
             <!-- 术语库视图 -->
             <div class="view" id="termsView">
-                <div class="view-header">
-                    <h2>术语库</h2>
+                <div class="page-header">
+                    <div class="page-header-content">
+                        <h2 class="page-title">术语管理</h2>
+                        <p class="page-subtitle">管理专业术语库，提升翻译准确性和一致性</p>
+                    </div>
                     <div class="view-actions">
                         <button class="btn btn-outline" id="addTermBtn">+ 添加术语</button>
                         <button class="btn btn-outline" id="manageCategoriesBtn">分类管理</button>
@@ -206,7 +294,10 @@
                         </div>
                         <div class="form-group">
                             <label>中文译法</label>
-                            <input type="text" class="form-input" id="termTarget" placeholder="输入中文译法...">
+                            <div class="multi-translation-input">
+                                <input type="text" class="form-input" id="termTarget" placeholder="输入中文译法...">
+                                <p class="input-hint">多个译词用 | 分隔，如：单元格 | 细胞 | 电池</p>
+                            </div>
                         </div>
                         <div class="form-group">
                             <label>分类</label>
@@ -254,8 +345,11 @@
             
             <!-- 翻译记忆视图 -->
             <div class="view" id="memoryView">
-                <div class="view-header">
-                    <h2>翻译记忆</h2>
+                <div class="page-header">
+                    <div class="page-header-content">
+                        <h2 class="page-title">记忆管理</h2>
+                        <p class="page-subtitle">管理翻译记忆库，自动复用历史翻译结果</p>
+                    </div>
                     <div class="view-actions">
                         <button class="btn btn-outline" id="cleanupMemoryBtn">清理低质量</button>
                         <button class="btn btn-outline" id="showDuplicatesBtn">查看重复</button>
@@ -268,6 +362,175 @@
 
                 <div class="memory-list" id="memoryList">
                     <div class="loading">加载中...</div>
+                </div>
+            </div>
+
+            <!-- 用户管理视图 -->
+            <div class="view" id="adminView">
+                <div class="page-header">
+                    <div class="page-header-content">
+                        <h2 class="page-title">用户管理</h2>
+                        <p class="page-subtitle">管理系统用户，审批新用户注册申请</p>
+                    </div>
+                    <div class="view-actions">
+                        <button class="btn btn-outline" id="refreshUsersBtn">刷新</button>
+                    </div>
+                </div>
+
+                <!-- 标签页 -->
+                <div class="admin-view-tabs">
+                    <button class="admin-view-tab active" data-tab="pending">待审批</button>
+                    <button class="admin-view-tab" data-tab="all">所有用户</button>
+                </div>
+
+                <!-- 待审批用户 -->
+                <div class="admin-view-panel" id="pendingViewPanel">
+                    <div class="users-table-container">
+                        <table class="users-table" id="pendingUsersTable">
+                            <thead>
+                                <tr>
+                                    <th>用户名</th>
+                                    <th>邮箱</th>
+                                    <th>注册时间</th>
+                                    <th>操作</th>
+                                </tr>
+                            </thead>
+                            <tbody id="pendingUsersBody">
+                                <!-- 待审批用户列表 -->
+                            </tbody>
+                        </table>
+                        <div class="empty-state" id="pendingEmpty" style="display: none;">
+                            <p>暂无待审批用户</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 所有用户 -->
+                <div class="admin-view-panel" id="allUsersViewPanel" style="display: none;">
+                    <div class="users-table-container">
+                        <table class="users-table" id="allUsersTable">
+                            <thead>
+                                <tr>
+                                    <th>用户名</th>
+                                    <th>邮箱</th>
+                                    <th>角色</th>
+                                    <th>状态</th>
+                                    <th>注册时间</th>
+                                    <th>操作</th>
+                                </tr>
+                            </thead>
+                            <tbody id="allUsersBody">
+                                <!-- 所有用户列表 -->
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 统计面板视图 -->
+            <div class="view" id="statsView">
+                <div class="page-header">
+                    <div class="page-header-content">
+                        <h2 class="page-title">统计面板</h2>
+                        <p class="page-subtitle">查看系统使用情况和数据统计</p>
+                    </div>
+                    <div class="view-actions">
+                        <button class="btn" id="refreshStatsBtn">刷新</button>
+                    </div>
+                </div>
+
+                <!-- 概览卡片 -->
+                <div class="stats-cards-row">
+                    <div class="stats-metric-card">
+                        <div class="stats-metric-icon">
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
+                                <circle cx="12" cy="7" r="4"></circle>
+                            </svg>
+                        </div>
+                        <div class="stats-metric-main">
+                            <div class="stats-metric-value" id="statsTotalUsers">0</div>
+                            <div class="stats-metric-label">总用户数</div>
+                            <div class="stats-metric-sub" id="statsUsersTrend">今日 +0</div>
+                        </div>
+                    </div>
+                    <div class="stats-metric-card">
+                        <div class="stats-metric-icon">
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                                <polyline points="14 2 14 8 20 8"></polyline>
+                                <line x1="16" y1="13" x2="8" y2="13"></line>
+                                <line x1="16" y1="17" x2="8" y2="17"></line>
+                                <polyline points="10 9 9 9 8 9"></polyline>
+                            </svg>
+                        </div>
+                        <div class="stats-metric-main">
+                            <div class="stats-metric-value" id="statsTotalFiles">0</div>
+                            <div class="stats-metric-label">翻译文件数</div>
+                            <div class="stats-metric-sub" id="statsFilesTrend">今日 +0</div>
+                        </div>
+                    </div>
+                    <div class="stats-metric-card">
+                        <div class="stats-metric-icon">
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path>
+                                <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path>
+                            </svg>
+                        </div>
+                        <div class="stats-metric-main">
+                            <div class="stats-metric-value" id="statsTotalTerms">0</div>
+                            <div class="stats-metric-label">术语条目</div>
+                            <div class="stats-metric-sub" id="statsTermsTrend">分类 0</div>
+                        </div>
+                    </div>
+                    <div class="stats-metric-card">
+                        <div class="stats-metric-icon">
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+                                <line x1="3" y1="9" x2="21" y2="9"></line>
+                                <line x1="9" y1="21" x2="9" y2="9"></line>
+                            </svg>
+                        </div>
+                        <div class="stats-metric-main">
+                            <div class="stats-metric-value" id="statsTotalLLM">0</div>
+                            <div class="stats-metric-label">LLM调用</div>
+                            <div class="stats-metric-sub" id="statsLLMTrend">今日 +0</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 趋势图表 -->
+                <div class="stats-block">
+                    <div class="stats-block-header">
+                        <h3 class="stats-block-title">使用趋势</h3>
+                        <div class="stats-segmented-control">
+                            <button class="stats-segment active" data-days="7">7天</button>
+                            <button class="stats-segment" data-days="30">30天</button>
+                            <button class="stats-segment" data-days="90">90天</button>
+                        </div>
+                    </div>
+                    <div class="stats-chart-wrapper">
+                        <canvas id="statsTrendChart"></canvas>
+                    </div>
+                </div>
+
+                <!-- 详细数据 -->
+                <div class="stats-block">
+                    <div class="stats-block-header">
+                        <h3 class="stats-block-title">详细数据</h3>
+                        <div class="stats-tabs">
+                            <button class="stats-tab active" data-type="users">用户排行</button>
+                            <button class="stats-tab" data-type="files">文件记录</button>
+                            <button class="stats-tab" data-type="llm">LLM记录</button>
+                        </div>
+                    </div>
+                    <div class="users-table-container">
+                        <table class="users-table" id="statsDetailTable">
+                            <thead id="statsDetailHead"></thead>
+                            <tbody id="statsDetailBody"></tbody>
+                        </table>
+                    </div>
+                    <div class="stats-pagination" id="statsPagination"></div>
                 </div>
             </div>
 
@@ -288,14 +551,31 @@
             
             <!-- 文本翻译视图 -->
             <div class="view active" id="translateView">
-                <div class="view-header">
-                    <h2>文本翻译</h2>
+                <div class="page-header">
+                    <div class="page-header-content">
+                        <h2 class="page-title">文本翻译</h2>
+                        <p class="page-subtitle">快速翻译文本内容，支持中英互译</p>
+                    </div>
+                    <!-- 翻译方向切换器 -->
+                    <div class="lang-switcher-pill" id="textLangSwitcherTop">
+                        <button class="lang-switch-pill-btn active" data-direction="en2zh">
+                            <span class="lang-flag-badge">US</span>
+                            <span>英译中</span>
+                        </button>
+                        <button class="lang-switch-pill-btn" data-direction="zh2en">
+                            <span class="lang-flag-badge">CN</span>
+                            <span>中译英</span>
+                        </button>
+                    </div>
                 </div>
-                
+
                 <div class="translate-container">
                     <div class="editor-section">
                         <div class="editor-header">
-                            <span class="editor-label">原文</span>
+                            <span class="editor-label" id="sourceLabel">
+                                <span class="label-flag-badge" id="sourceFlag">US</span>
+                                <span>原文</span>
+                            </span>
                             <button class="btn btn-small" id="clearBtn">清空</button>
                         </div>
                         <textarea 
@@ -305,20 +585,23 @@
                             spellcheck="false"
                         ></textarea>
                     </div>
-                    
+
                     <div class="editor-actions">
                         <button class="btn btn-primary" id="translateBtn">翻译</button>
                     </div>
-                    
+
                     <div class="editor-section">
                         <div class="editor-header">
-                            <span class="editor-label">译文</span>
+                            <span class="editor-label" id="targetLabel">
+                                <span class="label-flag-badge" id="targetFlag">CN</span>
+                                <span>译文</span>
+                            </span>
                             <span class="translation-source" id="translationSource"></span>
                         </div>
                         <textarea 
                             class="editor" 
                             id="targetText" 
-                            placeholder="翻译结果..."
+                            placeholder="翻译结果（中文）..."
                             readonly
                             spellcheck="false"
                         ></textarea>
@@ -337,9 +620,22 @@
             
             <!-- 文件翻译视图 -->
             <div class="view" id="filesView">
-                <div class="view-header">
-                    <h2>文件翻译</h2>
-                    <p class="view-desc">上传新文件进行翻译，自动参考术语库和翻译记忆</p>
+                <div class="page-header">
+                    <div class="page-header-content">
+                        <h2 class="page-title">文件翻译</h2>
+                        <p class="page-subtitle">上传新文件进行翻译，自动参考术语库和翻译记忆</p>
+                    </div>
+                    <!-- 翻译方向切换器 -->
+                    <div class="lang-switcher-pill" id="fileLangSwitcher">
+                        <button class="lang-switch-pill-btn active" data-direction="en2zh">
+                            <span class="lang-flag-badge">US</span>
+                            <span>英译中</span>
+                        </button>
+                        <button class="lang-switch-pill-btn" data-direction="zh2en">
+                            <span class="lang-flag-badge">CN</span>
+                            <span>中译英</span>
+                        </button>
+                    </div>
                 </div>
                 
                 <div class="file-container">
@@ -391,21 +687,23 @@
 
             <!-- 翻译历史视图 -->
             <div class="view" id="historyView">
-                <div class="view-header">
-                    <h2>📚 翻译历史</h2>
-                    <p class="view-desc">查看和管理您的翻译记录</p>
+                <div class="page-header">
+                    <div class="page-header-content">
+                        <h2 class="page-title">翻译历史</h2>
+                        <p class="page-subtitle">查看和管理您的翻译记录</p>
+                    </div>
                 </div>
                 
                 <div class="history-container">
                     <div class="history-toolbar">
                         <div class="history-filters">
-                            <input type="text" class="form-input" id="historySearchInput" placeholder="🔍 搜索文件名、摘要或用户名..." style="width: 280px;">
+                            <input type="text" class="search-input" id="historySearchInput" placeholder="搜索文件名、摘要或用户名...">
                             <select class="form-select" id="historyUserFilter" style="display: none;">
                                 <option value="">所有用户</option>
                             </select>
                         </div>
-                        <button class="btn btn-ghost" id="refreshHistoryBtn">
-                            <span>🔄 刷新</span>
+                        <button class="btn-icon" id="refreshHistoryBtn" title="刷新">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 4v6h-6M1 20v-6h6M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/></svg>
                         </button>
                     </div>
                     <div class="history-list" id="historyList">
@@ -426,55 +724,59 @@
     <!-- 提示消息 -->
     <div class="toast" id="toast"></div>
 
-    <!-- 登录/注册弹窗 - 全屏遮罩 -->
-    <div class="modal auth-modal-fullscreen" id="authModal" style="display: none;">
-        <div class="modal-content auth-modal-content">
-            <div class="auth-logo">
-                <span class="auth-logo-icon">🌐</span>
-                <h1>TransGuide</h1>
-                <p>智能翻译助手</p>
+    <!-- 登录/注册弹窗 - Linear 风格 -->
+    <div class="modal auth-modal" id="authModal" style="display: none;">
+        <div class="auth-card">
+            <!-- 品牌区 -->
+            <div class="auth-brand">
+                <div class="auth-brand-icon">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <circle cx="12" cy="12" r="10"></circle>
+                        <line x1="2" y1="12" x2="22" y2="12"></line>
+                        <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path>
+                    </svg>
+                </div>
+                <h1 class="auth-brand-title">TransGuide</h1>
+                <p class="auth-brand-subtitle">AI-Powered Translation Tool</p>
             </div>
-            <div class="modal-header">
-                <h3 id="authModalTitle">登录</h3>
+
+            <!-- 标签页 -->
+            <div class="auth-tabs">
+                <button class="auth-tab active" data-tab="login">登录</button>
+                <button class="auth-tab" data-tab="register">注册</button>
             </div>
-            <div class="modal-body">
-                <div class="auth-tabs">
-                    <button class="auth-tab active" data-tab="login">登录</button>
-                    <button class="auth-tab" data-tab="register">注册</button>
-                </div>
 
-                <!-- 登录表单 -->
-                <div class="auth-form" id="loginForm">
-                    <div class="form-group">
-                        <label>用户名</label>
-                        <input type="text" class="form-input" id="loginUsername" placeholder="输入用户名...">
-                    </div>
-                    <div class="form-group">
-                        <label>密码</label>
-                        <input type="password" class="form-input" id="loginPassword" placeholder="输入密码...">
-                    </div>
-                    <div class="form-error" id="loginError"></div>
-                    <button class="btn btn-primary btn-block" id="doLoginBtn">登录</button>
+            <!-- 登录表单 -->
+            <div class="auth-form" id="loginForm">
+                <div class="auth-form-group">
+                    <label class="auth-form-label">用户名</label>
+                    <input type="text" class="auth-form-input" id="loginUsername" placeholder="输入用户名">
                 </div>
+                <div class="auth-form-group">
+                    <label class="auth-form-label">密码</label>
+                    <input type="password" class="auth-form-input" id="loginPassword" placeholder="输入密码">
+                </div>
+                <div class="auth-form-error" id="loginError"></div>
+                <button class="auth-submit-btn" id="doLoginBtn">登录</button>
+            </div>
 
-                <!-- 注册表单 -->
-                <div class="auth-form" id="registerForm" style="display: none;">
-                    <div class="form-group">
-                        <label>用户名</label>
-                        <input type="text" class="form-input" id="registerUsername" placeholder="设置用户名...">
-                    </div>
-                    <div class="form-group">
-                        <label>密码</label>
-                        <input type="password" class="form-input" id="registerPassword" placeholder="设置密码（至少6位）...">
-                    </div>
-                    <div class="form-group">
-                        <label>邮箱（可选）</label>
-                        <input type="email" class="form-input" id="registerEmail" placeholder="输入邮箱...">
-                    </div>
-                    <div class="form-error" id="registerError"></div>
-                    <button class="btn btn-primary btn-block" id="doRegisterBtn">注册</button>
-                    <p class="form-hint">注册后需要管理员审批才能使用</p>
+            <!-- 注册表单 -->
+            <div class="auth-form" id="registerForm" style="display: none;">
+                <div class="auth-form-group">
+                    <label class="auth-form-label">用户名</label>
+                    <input type="text" class="auth-form-input" id="registerUsername" placeholder="设置用户名">
                 </div>
+                <div class="auth-form-group">
+                    <label class="auth-form-label">密码</label>
+                    <input type="password" class="auth-form-input" id="registerPassword" placeholder="设置密码（至少6位）">
+                </div>
+                <div class="auth-form-group">
+                    <label class="auth-form-label">邮箱</label>
+                    <input type="email" class="auth-form-input" id="registerEmail" placeholder="选填邮箱">
+                </div>
+                <div class="auth-form-error" id="registerError"></div>
+                <p class="auth-form-hint">注册后需要管理员审批才能使用</p>
+                <button class="auth-submit-btn" id="doRegisterBtn">注册</button>
             </div>
         </div>
     </div>
@@ -509,6 +811,139 @@
         </div>
     </div>
 
+    <!-- 编辑用户弹窗 -->
+    <div class="modal" id="editUserModal" style="display: none;">
+        <div class="modal-content edit-user-modal">
+            <div class="modal-header">
+                <h3>编辑用户</h3>
+                <button class="modal-close" id="closeEditUserModal">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="edit-user-form">
+                    <div class="form-group">
+                        <label class="form-label">用户名</label>
+                        <div class="form-static-text" id="editUsername"></div>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">邮箱</label>
+                        <input type="email" class="form-input" id="editEmail" placeholder="输入邮箱">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">角色</label>
+                        <select class="form-select" id="editRole">
+                            <option value="user">用户</option>
+                            <option value="manager">主管</option>
+                            <option value="admin">管理员</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">密码</label>
+                        <input type="password" class="form-input" id="editPassword" placeholder="留空则不修改密码">
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-text" id="cancelEditUser">取消</button>
+                <button type="button" class="btn btn-primary" id="saveEditUser">保存</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- About 弹窗 -->
+    <div class="modal" id="aboutModal" style="display: none;">
+        <div class="modal-content about-modal">
+            <div class="about-header">
+                <h2>TransGuide</h2>
+                <p class="about-subtitle">使用说明与项目信息</p>
+            </div>
+
+            <div class="about-body">
+                <!-- 制作者信息 -->
+                <div class="about-section">
+                    <h3 class="about-section-title">制作者信息</h3>
+                    <ul class="about-list">
+                        <li>作者：付立业</li>
+                        <li>邮箱：superfly01@dingtalk.com</li>
+                    </ul>
+                </div>
+
+                <!-- 项目简介 -->
+                <div class="about-section">
+                    <h3 class="about-section-title">项目简介</h3>
+                    <p class="about-text">TransGuide 是一款面向技术文档的智能翻译工具，支持 Word、Excel、PPT、PDF 等多种格式。集成术语库和翻译记忆功能，确保专业术语翻译的一致性和准确性。</p>
+                </div>
+
+                <!-- 使用方法 -->
+                <div class="about-section">
+                    <h3 class="about-section-title">使用方法</h3>
+                    <ul class="about-list">
+                        <li><strong>文本翻译</strong>：直接输入或粘贴文本，一键获取译文</li>
+                        <li><strong>文件翻译</strong>：拖拽上传文档，系统自动提取内容并翻译</li>
+                        <li><strong>术语管理</strong>：在术语库中添加专业术语，提升翻译质量</li>
+                        <li><strong>翻译记忆</strong>：系统自动学习历史翻译，加速后续工作</li>
+                    </ul>
+                </div>
+
+                <!-- 版本信息 -->
+                <div class="about-section">
+                    <h3 class="about-section-title">版本信息</h3>
+                    <ul class="about-list">
+                        <li>Frontend v2.2</li>
+                        <li>Backend v1.2.0</li>
+                        <li>CSS v2.2</li>
+                    </ul>
+                </div>
+            </div>
+
+            <div class="about-footer">
+                <button class="about-close-btn" id="closeAboutBtn">关闭</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 个人设置弹窗 -->
+    <div class="modal" id="userSettingsModal" style="display: none;">
+        <div class="modal-content user-settings-modal">
+            <div class="modal-header">
+                <h3>个人设置</h3>
+                <button class="modal-close" id="closeUserSettingsBtn">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="user-settings-form">
+                    <div class="form-group">
+                        <label class="form-label">用户名</label>
+                        <div class="form-static-text" id="settingsUsername">-</div>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">当前邮箱</label>
+                        <div class="form-static-text" id="settingsCurrentEmail">-</div>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">新邮箱</label>
+                        <input type="email" class="form-input" id="settingsNewEmail" placeholder="留空则不修改邮箱">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">旧密码</label>
+                        <input type="password" class="form-input" id="settingsOldPassword" placeholder="请输入当前密码（必填，用于验证身份）">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">新密码</label>
+                        <input type="password" class="form-input" id="settingsNewPassword" placeholder="留空则不修改密码">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">确认新密码</label>
+                        <input type="password" class="form-input" id="settingsConfirmPassword" placeholder="再次输入新密码（与新密码一致）">
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-text" id="cancelUserSettingsBtn">取消</button>
+                <button class="btn btn-primary" id="saveUserSettingsBtn">保存</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
     <script src="{{ url_for('static', filename='app.js') }}"></script>
 </body>
 </html>

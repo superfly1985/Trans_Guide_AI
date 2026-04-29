@@ -76,7 +76,32 @@ class TermDatabase:
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
-        
+
+        # 术语使用反馈表 - 用于记录用户修正，优化推断
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS term_feedback (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                source_term TEXT NOT NULL,
+                suggested_translation TEXT NOT NULL,
+                context TEXT DEFAULT '',
+                file_type TEXT DEFAULT '',
+                user_id INTEGER,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
+        # 术语使用统计表 - 记录每个译词被使用的频率
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS term_usage_stats (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                source_term TEXT NOT NULL,
+                translation TEXT NOT NULL,
+                use_count INTEGER DEFAULT 1,
+                last_used_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(source_term, translation)
+            )
+        """)
+
         conn.commit()
         conn.close()
     
@@ -138,10 +163,10 @@ class TermDatabase:
     def get_term(self, source: str) -> Optional[str]:
         """
         查询术语译法
-        
+
         Args:
             source: 英文术语
-            
+
         Returns:
             中文译法，不存在返回None
         """
@@ -154,6 +179,39 @@ class TermDatabase:
         row = cursor.fetchone()
         conn.close()
         return row["target_term"] if row else None
+
+    def get_term_with_context(self, source: str, text_context: str) -> Optional[str]:
+        """
+        根据上下文获取最合适的术语译法
+
+        Args:
+            source: 英文术语
+            text_context: 待翻译的文本片段（用于推断上下文）
+
+        Returns:
+            最合适的中文译法，不存在返回None
+        """
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT target_term FROM terms WHERE source_term = ?",
+            (source,)
+        )
+        row = cursor.fetchone()
+        conn.close()
+
+        if not row:
+            return None
+
+        target = row["target_term"]
+
+        # 如果有多个译词（用 | 分隔），根据上下文选择
+        if '|' in target:
+            from .context_resolver import ContextResolver
+            translations = target.split('|')
+            return ContextResolver.resolve(source, translations, text_context)
+
+        return target
     
     def get_term_detail(self, source: str) -> Optional[Dict]:
         """
@@ -581,5 +639,107 @@ class TermDatabase:
             # 大小写不敏感匹配
             if source.lower() in text_lower:
                 matched[source] = target
-        
+
         return matched
+
+    # ==================== 术语反馈和统计 ====================
+
+    def record_term_feedback(self, source: str, suggested: str, context: str = "",
+                            file_type: str = "", user_id: int = None) -> bool:
+        """
+        记录术语使用反馈（用户修正）
+
+        Args:
+            source: 原文术语
+            suggested: 用户建议的译词
+            context: 使用上下文
+            file_type: 文件类型
+            user_id: 用户ID
+
+        Returns:
+            是否记录成功
+        """
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        try:
+            cursor.execute("""
+                INSERT INTO term_feedback (source_term, suggested_translation, context, file_type, user_id)
+                VALUES (?, ?, ?, ?, ?)
+            """, (source, suggested, context, file_type, user_id))
+            conn.commit()
+            return True
+        except Exception as e:
+            print(f"记录术语反馈失败: {e}")
+            return False
+        finally:
+            conn.close()
+
+    def update_term_usage_stats(self, source: str, translation: str) -> bool:
+        """
+        更新术语使用统计
+
+        Args:
+            source: 原文术语
+            translation: 实际使用的译词
+
+        Returns:
+            是否更新成功
+        """
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        try:
+            cursor.execute("""
+                INSERT INTO term_usage_stats (source_term, translation, use_count, last_used_at)
+                VALUES (?, ?, 1, ?)
+                ON CONFLICT(source_term, translation) DO UPDATE SET
+                    use_count = use_count + 1,
+                    last_used_at = excluded.last_used_at
+            """, (source, translation, datetime.now()))
+            conn.commit()
+            return True
+        except Exception as e:
+            print(f"更新术语使用统计失败: {e}")
+            return False
+        finally:
+            conn.close()
+
+    def get_term_usage_stats(self, source: str) -> Dict[str, int]:
+        """
+        获取术语使用统计
+
+        Args:
+            source: 原文术语
+
+        Returns:
+            各译词使用次数字典 {译词: 次数}
+        """
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT translation, use_count
+            FROM term_usage_stats
+            WHERE source_term = ?
+            ORDER BY use_count DESC
+        """, (source,))
+        rows = cursor.fetchall()
+        conn.close()
+        return {row["translation"]: row["use_count"] for row in rows}
+
+    def get_popular_translations(self, source: str, translations: List[str]) -> List[str]:
+        """
+        根据使用统计排序译词（使用频率高的优先）
+
+        Args:
+            source: 原文术语
+            translations: 所有可能的译词列表
+
+        Returns:
+            按使用频率排序的译词列表
+        """
+        stats = self.get_term_usage_stats(source)
+        if not stats:
+            return translations
+
+        # 按使用频率排序
+        sorted_trans = sorted(translations, key=lambda t: stats.get(t, 0), reverse=True)
+        return sorted_trans

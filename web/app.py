@@ -1,7 +1,7 @@
 """
 TransGuide Web 应用
 提供翻译服务的 Web 界面
-后端版本: v1.1.0 - 支持 Excel/PPT
+后端版本: v1.2.0 - 权限系统优化
 """
 
 import os
@@ -18,7 +18,8 @@ from flask import Flask, render_template, request, jsonify, send_file
 from werkzeug.utils import secure_filename
 
 # 版本信息
-APP_VERSION = 'v1.1.0'
+APP_VERSION = 'v1.2.0'
+CSS_VERSION = 'v2.2'
 BUILD_TIME = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
 # 添加项目根目录到路径
@@ -95,7 +96,7 @@ if config_path.exists():
     logger.info(f"config.json 中的 api_key 存在: {bool(api_config.get('api_key'))}")
 logger.info("=" * 60)
 
-# 翻译提示词模板
+# 翻译提示词模板 - 英译中
 TRANSLATION_PROMPT = """你是一个专业的技术文档翻译助手。
 
 【翻译要求】
@@ -116,6 +117,29 @@ TRANSLATION_PROMPT = """你是一个专业的技术文档翻译助手。
 {text}
 
 译文："""
+
+# 翻译提示词模板 - 中译英
+TRANSLATION_PROMPT_ZH2EN = """你是一个专业的技术文档翻译助手。请将以下中文内容翻译成英文。
+
+【翻译要求】
+1. 保持原文的格式和结构
+2. 使用专业、准确的技术术语
+3. 确保翻译流畅自然，符合英文技术文档表达习惯
+4. 保留原文中的数字、符号、单位
+5. 使用简洁、专业的英文表达，避免口语化
+
+【术语约束】
+翻译时请参考以下术语对照（中文 -> 英文）：
+{terms}
+
+【参考翻译记忆】
+{tm_examples}
+
+请翻译以下内容：
+
+{text}
+
+English Translation:"""
 
 
 def allowed_file(filename, allowed_extensions):
@@ -141,7 +165,23 @@ def login_required(f):
 
 
 def admin_required(f):
-    """管理员权限验证装饰器"""
+    """管理员权限验证装饰器 - 仅管理员可访问"""
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        user_id = request.headers.get('X-User-ID')
+        if not user_id:
+            return jsonify({'success': False, 'error': '请先登录'}), 401
+
+        user = user_db.get_user_by_id(int(user_id))
+        if not user or user['role'] != 'admin':
+            return jsonify({'success': False, 'error': '需要管理员权限'}), 403
+
+        return f(*args, **kwargs)
+    return decorated_function
+
+
+def manager_required(f):
+    """主管及以上权限验证装饰器 - 管理员和主管可访问"""
     @wraps(f)
     def decorated_function(*args, **kwargs):
         user_id = request.headers.get('X-User-ID')
@@ -150,7 +190,7 @@ def admin_required(f):
 
         user = user_db.get_user_by_id(int(user_id))
         if not user or user['role'] not in ['admin', 'manager']:
-            return jsonify({'success': False, 'error': '需要管理员权限'}), 403
+            return jsonify({'success': False, 'error': '需要主管及以上权限'}), 403
 
         return f(*args, **kwargs)
     return decorated_function
@@ -165,14 +205,12 @@ def index():
 # ========== 版本检查接口 ==========
 @app.route('/api/version')
 def get_version():
-    """获取后端版本信息"""
-    import modules.file_parser as fp
+    """获取版本信息"""
     return jsonify({
         'success': True,
-        'version': APP_VERSION,
-        'build_time': BUILD_TIME,
-        'file_parser_path': fp.__file__,
-        'supported_formats': ['.docx', '.doc', '.xlsx', '.xlsm', '.pptx', '.ppt', '.pdf', '.txt', '.csv']
+        'backend': APP_VERSION,
+        'css': CSS_VERSION,
+        'build_time': BUILD_TIME
     })
 
 
@@ -515,6 +553,47 @@ def get_current_user():
         return jsonify({'success': False, 'error': str(e)})
 
 
+@app.route('/api/user/settings', methods=['PUT'])
+@login_required
+def update_user_settings():
+    """用户修改个人设置（邮箱和密码）"""
+    try:
+        user_id = int(request.headers.get('X-User-ID'))
+        data = request.json
+
+        if not data:
+            return jsonify({'success': False, 'error': '请求数据不能为空'})
+
+        old_password = (data.get('old_password') or '').strip()
+        new_email = (data.get('new_email') or '').strip() or None
+        new_password = (data.get('new_password') or '').strip() or None
+
+        # 验证参数
+        if not old_password:
+            return jsonify({'success': False, 'error': '请输入当前密码'})
+
+        if new_password and len(new_password) < 6:
+            return jsonify({'success': False, 'error': '新密码至少需要6个字符'})
+
+        # 调用数据库方法
+        result = user_db.update_user_settings(
+            user_id=user_id,
+            old_password=old_password,
+            new_email=new_email,
+            new_password=new_password
+        )
+
+        if result['success']:
+            logger.info(f"用户 {user_id} 更新了个人设置")
+            return jsonify({'success': True, 'message': result['message']})
+        else:
+            return jsonify({'success': False, 'error': result['message']})
+
+    except Exception as e:
+        logger.error(f"更新用户设置失败: {e}")
+        return jsonify({'success': False, 'error': str(e)})
+
+
 # ========================================
 # 翻译历史记录辅助函数
 # ========================================
@@ -698,6 +777,43 @@ def reset_user_password(user_id):
         return jsonify({'success': False, 'error': str(e)})
 
 
+@app.route('/api/admin/users/<int:user_id>', methods=['PUT'])
+@admin_required
+def update_user(user_id):
+    """编辑用户信息"""
+    try:
+        admin_id = int(request.headers.get('X-User-ID'))
+        data = request.json
+
+        email = data.get('email', '').strip()
+        role = data.get('role', '').strip()
+        password = data.get('password', '').strip()
+
+        # 验证角色
+        if role not in ['user', 'manager', 'admin']:
+            return jsonify({'success': False, 'error': '无效的角色'})
+
+        # 更新用户信息
+        result = user_db.update_user(user_id, admin_id, email=email, role=role, password=password)
+        return jsonify(result)
+    except Exception as e:
+        logger.error(f"更新用户失败: {e}")
+        return jsonify({'success': False, 'error': str(e)})
+
+
+@app.route('/api/admin/users/<int:user_id>/enable', methods=['POST'])
+@admin_required
+def enable_user(user_id):
+    """启用用户"""
+    try:
+        admin_id = int(request.headers.get('X-User-ID'))
+        result = user_db.enable_user(user_id, admin_id)
+        return jsonify(result)
+    except Exception as e:
+        logger.error(f"启用用户失败: {e}")
+        return jsonify({'success': False, 'error': str(e)})
+
+
 @app.route('/api/stats')
 @login_required
 def get_stats():
@@ -721,6 +837,254 @@ def get_stats():
         })
     except Exception as e:
         logger.error(f"获取统计失败: {e}")
+        return jsonify({'success': False, 'error': str(e)})
+
+
+# ========================================
+# 管理员统计 API
+# ========================================
+
+@app.route('/api/admin/stats/overview')
+@manager_required
+def get_admin_stats_overview():
+    """获取管理员统计概览"""
+    try:
+        # 获取系统概览
+        overview = user_db.get_system_overview()
+
+        # 获取术语统计
+        terms = term_db.get_all_terms()
+        terms_count = len(terms)
+        term_stats = term_db.get_stats()
+
+        # 获取LLM统计
+        llm_stats = user_db.get_llm_usage_stats(days=30)
+
+        # 获取翻译记忆统计
+        tm_stats = tm_db.get_stats()
+
+        return jsonify({
+            'success': True,
+            'data': {
+                'users': {
+                    'total': overview['users']['total'],
+                    'new_today': overview['users']['new_today'],
+                    'active_7d': overview['users']['active_7d'],
+                    'active_30d': overview['users']['active_30d'],
+                    'pending': overview['users']['pending']
+                },
+                'files': {
+                    'total': overview['files']['total'],
+                    'today': overview['files']['today'],
+                    'this_month': overview['files']['this_month']
+                },
+                'terms': {
+                    'total': terms_count,
+                    'categories': term_stats.get('category_count', 0)
+                },
+                'llm': {
+                    'total_calls': llm_stats['total_calls'],
+                    'today_calls': llm_stats['today_calls'],
+                    'total_tokens': llm_stats['total_tokens'],
+                    'avg_response_time': llm_stats['avg_response_time'],
+                    'error_rate': llm_stats['error_rate']
+                },
+                'tm': {
+                    'total': tm_stats.get('total', 0),
+                    'source_files': tm_stats.get('source_files', 0)
+                }
+            }
+        })
+    except Exception as e:
+        logger.error(f"获取统计概览失败: {e}")
+        return jsonify({'success': False, 'error': str(e)})
+
+
+@app.route('/api/admin/stats/trend')
+@manager_required
+def get_admin_stats_trend():
+    """获取趋势数据"""
+    try:
+        days = request.args.get('days', 30, type=int)
+        metrics = request.args.getlist('metrics') or ['files', 'llm_calls']
+
+        result = {
+            'dates': [],
+            'series': []
+        }
+
+        # 获取日期列表
+        conn = user_db._get_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT DISTINCT date(created_at) as date
+            FROM translation_history
+            WHERE created_at >= date('now', '-{} days')
+            ORDER BY date
+        """.format(days))
+        dates = [row[0] for row in cursor.fetchall()]
+        result['dates'] = dates
+
+        # 文件统计趋势
+        if 'files' in metrics:
+            cursor.execute("""
+                SELECT date(created_at) as date, COUNT(*) as count
+                FROM translation_history
+                WHERE created_at >= date('now', '-{} days')
+                GROUP BY date(created_at)
+                ORDER BY date
+            """.format(days))
+            file_data = {row[0]: row[1] for row in cursor.fetchall()}
+            result['series'].append({
+                'name': '翻译文件数',
+                'data': [file_data.get(d, 0) for d in dates]
+            })
+
+        # LLM调用趋势
+        if 'llm_calls' in metrics:
+            cursor.execute("""
+                SELECT date(created_at) as date, COUNT(*) as count
+                FROM llm_usage
+                WHERE created_at >= date('now', '-{} days')
+                GROUP BY date(created_at)
+                ORDER BY date
+            """.format(days))
+            llm_data = {row[0]: row[1] for row in cursor.fetchall()}
+            result['series'].append({
+                'name': 'LLM调用',
+                'data': [llm_data.get(d, 0) for d in dates]
+            })
+
+        conn.close()
+
+        return jsonify({'success': True, 'data': result})
+    except Exception as e:
+        logger.error(f"获取趋势数据失败: {e}")
+        return jsonify({'success': False, 'error': str(e)})
+
+
+@app.route('/api/admin/stats/detail')
+@manager_required
+def get_admin_stats_detail():
+    """获取详细统计数据"""
+    try:
+        stat_type = request.args.get('type', 'users')
+        page = request.args.get('page', 1, type=int)
+        limit = request.args.get('limit', 20, type=int)
+
+        if stat_type == 'users':
+            # 获取用户活跃度排行
+            conn = user_db._get_connection()
+            cursor = conn.cursor()
+
+            # 总数
+            cursor.execute("SELECT COUNT(*) FROM users")
+            total = cursor.fetchone()[0]
+
+            # 用户列表及统计
+            cursor.execute("""
+                SELECT
+                    u.id,
+                    u.username,
+                    u.email,
+                    u.role,
+                    u.status,
+                    u.created_at,
+                    u.last_login,
+                    COUNT(h.id) as file_count
+                FROM users u
+                LEFT JOIN translation_history h ON u.id = h.user_id
+                GROUP BY u.id
+                ORDER BY file_count DESC
+                LIMIT ? OFFSET ?
+            """, (limit, (page - 1) * limit))
+
+            items = []
+            for row in cursor.fetchall():
+                items.append({
+                    'id': row[0],
+                    'username': row[1],
+                    'email': row[2],
+                    'role': row[3],
+                    'status': row[4],
+                    'created_at': row[5],
+                    'last_login': row[6],
+                    'file_count': row[7]
+                })
+
+            conn.close()
+
+            return jsonify({
+                'success': True,
+                'data': {
+                    'total': total,
+                    'page': page,
+                    'limit': limit,
+                    'items': items
+                }
+            })
+
+        elif stat_type == 'files':
+            # 获取翻译历史
+            result = user_db.get_translation_history(page=page, limit=limit)
+            return jsonify({'success': True, 'data': result})
+
+        elif stat_type == 'llm':
+            # 获取LLM使用详情
+            conn = user_db._get_connection()
+            cursor = conn.cursor()
+
+            cursor.execute("SELECT COUNT(*) FROM llm_usage")
+            total = cursor.fetchone()[0]
+
+            cursor.execute("""
+                SELECT
+                    l.id,
+                    l.user_id,
+                    u.username,
+                    l.operation_type,
+                    l.model_name,
+                    l.total_tokens,
+                    l.response_time_ms,
+                    l.status,
+                    l.created_at
+                FROM llm_usage l
+                LEFT JOIN users u ON l.user_id = u.id
+                ORDER BY l.created_at DESC
+                LIMIT ? OFFSET ?
+            """, (limit, (page - 1) * limit))
+
+            items = []
+            for row in cursor.fetchall():
+                items.append({
+                    'id': row[0],
+                    'user_id': row[1],
+                    'username': row[2],
+                    'operation_type': row[3],
+                    'model_name': row[4],
+                    'total_tokens': row[5],
+                    'response_time_ms': row[6],
+                    'status': row[7],
+                    'created_at': row[8]
+                })
+
+            conn.close()
+
+            return jsonify({
+                'success': True,
+                'data': {
+                    'total': total,
+                    'page': page,
+                    'limit': limit,
+                    'items': items
+                }
+            })
+
+        else:
+            return jsonify({'success': False, 'error': '未知的统计类型'})
+
+    except Exception as e:
+        logger.error(f"获取详细统计失败: {e}")
         return jsonify({'success': False, 'error': str(e)})
 
 
@@ -1006,23 +1370,50 @@ def translate_text():
     try:
         data = request.json
         text = data.get('text', '').strip()
+        direction = data.get('direction', 'en2zh')  # 翻译方向：en2zh 或 zh2en
         
         if not text:
             return jsonify({'success': True, 'translation': '', 'source': 'empty'})
         
-        # 检查是否是英文
-        english_chars = len(re.findall(r'[a-zA-Z]', text))
-        if english_chars < 5:
-            return jsonify({
-                'success': True,
-                'translation': text,
-                'source': 'non_english'
-            })
+        # 根据翻译方向检查输入语言
+        if direction == 'zh2en':
+            # 中译英：检查是否包含足够的中文字符
+            chinese_chars = len(re.findall(r'[\u4e00-\u9fff]', text))
+            if chinese_chars < 2:
+                return jsonify({
+                    'success': True,
+                    'translation': text,
+                    'source': 'non_chinese'
+                })
+        else:
+            # 英译中（默认）：检查是否包含足够的英文字符
+            english_chars = len(re.findall(r'[a-zA-Z]', text))
+            if english_chars < 5:
+                return jsonify({
+                    'success': True,
+                    'translation': text,
+                    'source': 'non_english'
+                })
         
-        # 检索术语
+        # 检索术语（根据方向调整匹配逻辑，使用上下文推断）
+        from modules.context_resolver import ContextResolver
         all_terms = term_db.get_all_terms()
-        matched_terms = {en: zh for en, zh in all_terms.items() 
-                        if en.lower() in text.lower()}
+        if direction == 'zh2en':
+            # 中译英：匹配中文术语，返回英文
+            matched_terms = {zh: en for en, zh in all_terms.items()
+                            if zh in text}
+        else:
+            # 英译中：匹配英文术语，使用上下文推断选择最合适的译词
+            matched_terms = {}
+            for en, zh in all_terms.items():
+                if en.lower() in text.lower():
+                    # 如果有多个译词（用 | 分隔），根据上下文选择
+                    if '|' in zh:
+                        translations = zh.split('|')
+                        best_translation = ContextResolver.resolve(en, translations, text)
+                        matched_terms[en] = best_translation
+                    else:
+                        matched_terms[en] = zh
         
         # 检索TM
         tm_matches = tm_db.search_similar(text, top_k=1)
@@ -1050,11 +1441,19 @@ def translate_text():
         else:
             tm_examples_str = "无"
         
-        prompt = TRANSLATION_PROMPT.format(
-            text=text,
-            terms=terms_str,
-            tm_examples=tm_examples_str
-        )
+        # 根据方向选择提示词模板
+        if direction == 'zh2en':
+            prompt = TRANSLATION_PROMPT_ZH2EN.format(
+                text=text,
+                terms=terms_str,
+                tm_examples=tm_examples_str
+            )
+        else:
+            prompt = TRANSLATION_PROMPT.format(
+                text=text,
+                terms=terms_str,
+                tm_examples=tm_examples_str
+            )
         
         response = client.generate(prompt)
         
@@ -1082,8 +1481,10 @@ def translate_batch():
         data = request.json
         texts = data.get('texts', [])
         start_index = data.get('start_index', 0)  # 新增：起始索引偏移
-        
-        logger.info(f"收到批量翻译请求，文本数量: {len(texts)}, 起始索引: {start_index}")
+        direction = data.get('direction', 'en2zh')  # 翻译方向：en2zh 或 zh2en
+        file_type = data.get('file_type', '')  # 文件类型，用于预设领域
+
+        logger.info(f"收到批量翻译请求，文本数量: {len(texts)}, 起始索引: {start_index}, 方向: {direction}, 文件类型: {file_type}")
         
         if not texts:
             return jsonify({'success': False, 'error': '没有文本需要翻译'})
@@ -1098,15 +1499,37 @@ def translate_batch():
         combined_text = '\n\n---\n\n'.join(batch_text)
         logger.info(f"合并文本长度: {len(combined_text)} 字符")
         
-        # 检索术语
+        # 检索术语（使用上下文推断选择最合适的译词）
+        from modules.context_resolver import ContextResolver
+
+        # 根据文件类型预设领域上下文
+        domain_hint = None
+        if file_type in ['xlsx', 'xls', 'xlsm']:
+            domain_hint = 'excel'
+        elif file_type in ['docx', 'doc']:
+            # 文档类型需要更多上下文判断，暂不预设
+            domain_hint = None
+
+        # 合并所有文本用于领域推断
+        combined_context_for_domain = ' '.join([item.get('text', '') for item in texts])
+        if domain_hint:
+            combined_context_for_domain = f"{domain_hint} {combined_context_for_domain}"
+
         all_terms = term_db.get_all_terms()
         matched_terms = {}
         for item in texts:
             text = item.get('text', '')
             for en, zh in all_terms.items():
                 if en.lower() in text.lower():
-                    matched_terms[en] = zh
-        
+                    # 如果有多个译词（用 | 分隔），根据上下文选择
+                    if '|' in zh:
+                        translations = zh.split('|')
+                        # 使用合并的上下文（包含文件类型预设）进行推断
+                        best_translation = ContextResolver.resolve(en, translations, combined_context_for_domain)
+                        matched_terms[en] = best_translation
+                    else:
+                        matched_terms[en] = zh
+
         logger.info(f"匹配术语数量: {len(matched_terms)}")
         
         # LLM翻译
@@ -1117,7 +1540,49 @@ def translate_batch():
         
         terms_str = "\n".join([f"  - {k} -> {v}" for k, v in matched_terms.items()]) if matched_terms else "无"
         
-        prompt = f"""你是一个专业的技术文档翻译助手。
+        # 根据翻译方向构建不同的提示词
+        if direction == 'zh2en':
+            # 中译英
+            prompt = f"""你是一个专业的技术文档翻译助手。请将中文翻译成英文。
+
+【翻译要求】
+1. 保持原文的格式和结构
+2. 使用专业、准确的技术术语
+3. 确保翻译流畅自然，符合英文技术文档表达习惯
+4. 保留原文中的数字、符号、单位
+5. 使用简洁、专业的英文表达，避免口语化
+
+【术语约束】
+翻译时请参考以下术语对照（中文 -> 英文）：
+{terms_str}
+
+【待翻译文本】
+以下文本按 [BLOCK_X] 标记分隔，请保持标记不变，只翻译标记后的内容：
+
+{combined_text}
+
+【输出格式】
+请**严格按照以下格式**返回翻译结果，**每个 [BLOCK_X] 必须单独一行，不能合并多个块**：
+
+[BLOCK_0]
+English translation 0
+
+[BLOCK_1]
+English translation 1
+
+[BLOCK_2]
+English translation 2
+
+**重要规则：**
+1. 每个 [BLOCK_X] 标记必须单独一行
+2. 不要合并多个块（如 [BLOCK_9-BLOCK_26] 是错误的）
+3. 必须翻译所有块，不能跳过任何块
+4. 保持 [BLOCK_X] 标记不变，只翻译标记后的内容
+5. 输出必须是英文，不要包含中文原文
+"""
+        else:
+            # 英译中（默认）
+            prompt = f"""你是一个专业的技术文档翻译助手。
 
 【翻译要求】
 1. 保持原文的格式和结构
@@ -1507,7 +1972,7 @@ def download_file(filename):
 @app.route('/api/history', methods=['GET'])
 @login_required
 def get_translation_history():
-    """获取翻译历史列表，支持模糊搜索和用户筛选"""
+    """获取翻译历史列表，支持模糊搜索和用户筛选 - 所有用户可查看所有历史"""
     try:
         user_id = int(request.headers.get('X-User-ID', 0))
         user = user_db.get_user_by_id(user_id)
@@ -1517,18 +1982,10 @@ def get_translation_history():
         limit = request.args.get('limit', 20, type=int)
         status = request.args.get('status', None)
         keyword = request.args.get('keyword', None)  # 模糊搜索关键词
-        username = request.args.get('username', None)  # 按用户名筛选
+        username = request.args.get('filter_username', None)  # 按用户名筛选
 
-        # 管理员可以查看所有历史，普通用户只能看自己的
-        if user and user.get('role') == 'admin':
-            target_user_id = request.args.get('user_id', None, type=int)
-            # 管理员可以按用户名筛选
-            if not username:
-                username = request.args.get('filter_username', None)
-        else:
-            target_user_id = user_id
-            # 普通用户不能按用户名筛选
-            username = None
+        # 所有用户都可以查看所有历史，通过用户名筛选
+        target_user_id = None
 
         result = user_db.get_translation_history(
             user_id=target_user_id,
