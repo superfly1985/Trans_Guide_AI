@@ -506,6 +506,9 @@ def register():
         if not username or not password:
             return jsonify({'success': False, 'error': '用户名和密码不能为空'})
 
+        # 空邮箱转为None，避免唯一性冲突
+        email = email if email else None
+
         result = user_db.register(username, password, email)
         return jsonify(result)
     except Exception as e:
@@ -789,6 +792,9 @@ def update_user(user_id):
         role = data.get('role', '').strip()
         password = data.get('password', '').strip()
 
+        # 空邮箱转为None，避免唯一性冲突
+        email = email if email else None
+
         # 验证角色
         if role not in ['user', 'manager', 'admin']:
             return jsonify({'success': False, 'error': '无效的角色'})
@@ -830,8 +836,8 @@ def get_stats():
             'success': True,
             'stats': {
                 'terms_count': terms_count,
-                'tm_count': tm_stats.get('total', 0),
-                'duplicates': tm_stats.get('duplicates', 0),
+                'tm_count': tm_stats.get('total_segments', 0),
+                'duplicates': tm_stats.get('duplicate_segments', 0),
                 'source_files': tm_stats.get('source_files', 0)
             }
         })
@@ -1281,16 +1287,17 @@ def get_memory():
             conn = sqlite3.connect(str(DATA_DIR / 'tm.db'))
             cursor = conn.cursor()
             cursor.execute(
-                "SELECT source, target, created_at FROM segments ORDER BY created_at DESC LIMIT 100"
+                "SELECT id, original, translation, created_at FROM translation_memory ORDER BY created_at DESC LIMIT 100"
             )
             rows = cursor.fetchall()
             conn.close()
             
             memory_list = [
-                {'source': row[0], 'target': row[1], 'created_at': row[2]}
+                {'id': row[0], 'source': row[1], 'target': row[2], 'created_at': row[3]}
                 for row in rows
             ]
-        except:
+        except Exception as e:
+            logger.error(f"查询翻译记忆失败: {e}")
             memory_list = []
         
         return jsonify({'success': True, 'memory': memory_list})
@@ -1356,6 +1363,95 @@ def cleanup_memory():
         return jsonify({'success': True, 'deleted': deleted})
     except Exception as e:
         logger.error(f"清理翻译记忆失败: {e}")
+        return jsonify({'success': False, 'error': str(e)})
+
+
+@app.route('/api/memory/add', methods=['POST'])
+@login_required
+def add_memory():
+    """手动添加翻译记忆"""
+    try:
+        data = request.json
+        original = data.get('original', '').strip()
+        translation = data.get('translation', '').strip()
+
+        if not original or not translation:
+            return jsonify({'success': False, 'error': '原文和译文不能为空'})
+
+        # 添加到翻译记忆库，来源标记为 Manual_Input
+        success, status = tm_db.add_segment(original, translation, 'Manual_Input')
+        if success:
+            return jsonify({'success': True, 'message': status})
+        else:
+            return jsonify({'success': False, 'error': status})
+    except Exception as e:
+        logger.error(f"添加翻译记忆失败: {e}")
+        return jsonify({'success': False, 'error': str(e)})
+
+
+@app.route('/api/memory/<int:memory_id>', methods=['PUT'])
+@login_required
+def update_memory(memory_id):
+    """更新翻译记忆"""
+    try:
+        # 检查权限（只允许admin和manager编辑）
+        user_id = request.headers.get('X-User-ID')
+        user = user_db.get_user_by_id(int(user_id))
+        if not user or user['role'] not in ['admin', 'manager']:
+            return jsonify({'success': False, 'error': '权限不足'}), 403
+        
+        data = request.json
+        source = data.get('source', '').strip()
+        target = data.get('target', '').strip()
+        
+        if not source or not target:
+            return jsonify({'success': False, 'error': '原文和译文不能为空'})
+        
+        import sqlite3
+        conn = sqlite3.connect(str(DATA_DIR / 'tm.db'))
+        cursor = conn.cursor()
+        cursor.execute(
+            "UPDATE translation_memory SET original = ?, translation = ?, updated_at = ? WHERE id = ?",
+            (source, target, datetime.now(), memory_id)
+        )
+        conn.commit()
+        updated = cursor.rowcount
+        conn.close()
+        
+        if updated > 0:
+            return jsonify({'success': True, 'message': '更新成功'})
+        else:
+            return jsonify({'success': False, 'error': '记忆不存在'})
+    except Exception as e:
+        logger.error(f"更新翻译记忆失败: {e}")
+        return jsonify({'success': False, 'error': str(e)})
+
+
+@app.route('/api/memory/<int:memory_id>', methods=['DELETE'])
+@login_required
+def delete_memory(memory_id):
+    """删除翻译记忆"""
+    try:
+        # 检查权限（只允许admin和manager删除）
+        user_id = request.headers.get('X-User-ID')
+        user = user_db.get_user_by_id(int(user_id))
+        if not user or user['role'] not in ['admin', 'manager']:
+            return jsonify({'success': False, 'error': '权限不足'}), 403
+        
+        import sqlite3
+        conn = sqlite3.connect(str(DATA_DIR / 'tm.db'))
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM translation_memory WHERE id = ?", (memory_id,))
+        conn.commit()
+        deleted = cursor.rowcount
+        conn.close()
+        
+        if deleted > 0:
+            return jsonify({'success': True, 'message': '删除成功'})
+        else:
+            return jsonify({'success': False, 'error': '记忆不存在'})
+    except Exception as e:
+        logger.error(f"删除翻译记忆失败: {e}")
         return jsonify({'success': False, 'error': str(e)})
 
 
