@@ -321,6 +321,30 @@
                 </div>
             </div>
 
+            <!-- 新增记忆弹窗 -->
+            <div class="modal" id="addMemoryModal" style="display: none;">
+                <div class="modal-content" style="max-width: 600px;">
+                    <div class="modal-header">
+                        <h3>新增记忆</h3>
+                        <button class="modal-close" id="closeAddMemoryModal">&times;</button>
+                    </div>
+                    <div class="modal-body">
+                        <div class="form-group">
+                            <label>原文</label>
+                            <textarea id="addMemorySource" rows="4" style="width: 100%; padding: 8px; border: 1px solid var(--border-default); border-radius: 4px; background: var(--bg-surface); color: var(--text-body); font-family: inherit;" placeholder="输入原文..."></textarea>
+                        </div>
+                        <div class="form-group" style="margin-top: 16px;">
+                            <label>译文</label>
+                            <textarea id="addMemoryTarget" rows="4" style="width: 100%; padding: 8px; border: 1px solid var(--border-default); border-radius: 4px; background: var(--bg-surface); color: var(--text-body); font-family: inherit;" placeholder="输入译文..."></textarea>
+                        </div>
+                    </div>
+                    <div class="modal-footer">
+                        <button class="btn btn-secondary" id="cancelAddMemoryBtn">取消</button>
+                        <button class="btn btn-primary" id="saveAddMemoryBtn">保存</button>
+                    </div>
+                </div>
+            </div>
+
             <!-- 分类管理弹窗 -->
             <div class="modal" id="categoryModal" style="display: none;">
                 <div class="modal-content">
@@ -351,6 +375,7 @@
                         <p class="page-subtitle">管理翻译记忆库，自动复用历史翻译结果</p>
                     </div>
                     <div class="view-actions">
+                        <button class="btn btn-outline" id="addMemoryBtn">新增记忆</button>
                         <button class="btn btn-outline" id="cleanupMemoryBtn">清理低质量</button>
                         <button class="btn btn-outline" id="showDuplicatesBtn">查看重复</button>
                         <input type="text" class="search-input" id="memorySearch" placeholder="搜索句段...">
@@ -771,8 +796,12 @@
                     <input type="password" class="auth-form-input" id="registerPassword" placeholder="设置密码（至少6位）">
                 </div>
                 <div class="auth-form-group">
-                    <label class="auth-form-label">邮箱</label>
-                    <input type="email" class="auth-form-input" id="registerEmail" placeholder="选填邮箱">
+                    <label class="auth-form-label">确认密码</label>
+                    <input type="password" class="auth-form-input" id="registerPasswordConfirm" placeholder="再次输入密码">
+                </div>
+                <div class="auth-form-group">
+                    <label class="auth-form-label">邮箱（选填）</label>
+                    <input type="email" class="auth-form-input" id="registerEmail" placeholder="输入邮箱地址">
                 </div>
                 <div class="auth-form-error" id="registerError"></div>
                 <p class="auth-form-hint">注册后需要管理员审批才能使用</p>

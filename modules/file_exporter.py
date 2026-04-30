@@ -54,9 +54,8 @@ def export_word(
                     # 保留原文，在后面添加译文
                     para.add_run("\n")
                     run = para.add_run(translation)
-                    # 设置译文格式（红色、斜体以示区分）
+                    # 设置译文格式（红色以示区分）
                     run.font.color.rgb = RGBColor(0xFF, 0x00, 0x00)
-                    run.italic = True
                 else:
                     # 仅译文模式：替换原文
                     para.clear()
@@ -77,7 +76,6 @@ def export_word(
                             cell.paragraphs[0].add_run("\n")
                             run = cell.paragraphs[0].add_run(translation)
                             run.font.color.rgb = RGBColor(0xFF, 0x00, 0x00)
-                            run.italic = True
                         else:
                             cell.paragraphs[0].clear()
                             cell.paragraphs[0].add_run(translation)
@@ -156,7 +154,6 @@ def export_word_simple(
                         para.add_run("\n")
                         run = para.add_run(translation)
                         run.font.color.rgb = RGBColor(0xFF, 0x00, 0x00)
-                        run.italic = True
                     else:
                         para.clear()
                         para.add_run(translation)
@@ -168,7 +165,6 @@ def export_word_simple(
                         cell.paragraphs[0].add_run("\n")
                         run = cell.paragraphs[0].add_run(translation)
                         run.font.color.rgb = RGBColor(0xFF, 0x00, 0x00)
-                        run.italic = True
                     else:
                         cell.paragraphs[0].clear()
                         cell.paragraphs[0].add_run(translation)

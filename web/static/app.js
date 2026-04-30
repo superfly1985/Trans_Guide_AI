@@ -253,11 +253,18 @@ function bindTermManagementEvents() {
     });
 
     // 翻译记忆管理事件
+    document.getElementById('addMemoryBtn')?.addEventListener('click', openAddMemoryModal);
     document.getElementById('cleanupMemoryBtn')?.addEventListener('click', cleanupMemory);
     document.getElementById('showDuplicatesBtn')?.addEventListener('click', showDuplicates);
     document.getElementById('closeDuplicatesModal')?.addEventListener('click', closeDuplicatesModal);
     document.getElementById('duplicatesModal')?.addEventListener('click', (e) => {
         if (e.target.id === 'duplicatesModal') closeDuplicatesModal();
+    });
+    document.getElementById('closeAddMemoryModal')?.addEventListener('click', closeAddMemoryModal);
+    document.getElementById('cancelAddMemoryBtn')?.addEventListener('click', closeAddMemoryModal);
+    document.getElementById('saveAddMemoryBtn')?.addEventListener('click', saveAddMemory);
+    document.getElementById('addMemoryModal')?.addEventListener('click', (e) => {
+        if (e.target.id === 'addMemoryModal') closeAddMemoryModal();
     });
 
     // 用户认证事件
@@ -700,10 +707,10 @@ function renderImportPreview(data) {
                     <span class="category-label">${escapeHtml(category)}</span>
                     <div class="terms-items">
                         ${catTerms.map(term => `
-                            <div class="term-item">
-                                <span class="term-en">${escapeHtml(term.english)}</span>
-                                <span class="term-arrow">→</span>
-                                <span class="term-zh">${escapeHtml(term.chinese)}</span>
+                            <div class="extract-term-item">
+                                <span class="extract-term-en">${escapeHtml(term.english)}</span>
+                                <span class="extract-term-arrow">→</span>
+                                <span class="extract-term-zh">${escapeHtml(term.chinese)}</span>
                             </div>
                         `).join('')}
                     </div>
@@ -1385,10 +1392,21 @@ function renderMemory(memory) {
         return;
     }
 
+    // 检查用户权限（与术语管理相同）
+    const canEdit = state.user && (state.user.role === 'admin' || state.user.role === 'manager');
+
     elements.memoryList.innerHTML = memory.map(item => `
-        <div class="memory-item">
-            <div class="memory-source">${escapeHtml(item.source || item.original)}</div>
-            <div class="memory-target">${escapeHtml(item.target || item.translation)}</div>
+        <div class="memory-item" data-id="${item.id}">
+            <div class="memory-content">
+                <div class="memory-source">${escapeHtml(item.source || item.original)}</div>
+                <div class="memory-target">${escapeHtml(item.target || item.translation)}</div>
+            </div>
+            ${canEdit ? `
+                <div class="memory-actions">
+                    <button class="term-btn" onclick="editMemory(${item.id})">编辑</button>
+                    <button class="term-btn delete" onclick="deleteMemory(${item.id})">删除</button>
+                </div>
+            ` : ''}
         </div>
     `).join('');
 }
@@ -1439,6 +1457,58 @@ async function searchMemory() {
         }
     } catch (error) {
         console.error('搜索翻译记忆失败:', error);
+    }
+}
+
+// 打开新增记忆弹窗
+function openAddMemoryModal() {
+    document.getElementById('addMemoryModal').style.display = 'flex';
+    document.getElementById('addMemorySource').value = '';
+    document.getElementById('addMemoryTarget').value = '';
+    document.getElementById('addMemorySourceFile').value = '';
+    document.getElementById('addMemorySource').focus();
+}
+
+// 关闭新增记忆弹窗
+function closeAddMemoryModal() {
+    document.getElementById('addMemoryModal').style.display = 'none';
+}
+
+// 保存新增记忆
+async function saveAddMemory() {
+    const source = document.getElementById('addMemorySource').value.trim();
+    const target = document.getElementById('addMemoryTarget').value.trim();
+
+    if (!source || !target) {
+        showToast('原文和译文不能为空');
+        return;
+    }
+
+    try {
+        const response = await fetch('/api/memory/add', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-User-ID': state.user.id
+            },
+            body: JSON.stringify({
+                original: source,
+                translation: target
+            })
+        });
+
+        const data = await response.json();
+        if (data.success) {
+            showToast('记忆添加成功');
+            closeAddMemoryModal();
+            loadMemory();
+            loadMemoryStats();
+        } else {
+            showToast(data.error || '添加失败');
+        }
+    } catch (error) {
+        console.error('添加记忆失败:', error);
+        showToast('添加失败，请重试');
     }
 }
 
@@ -1564,6 +1634,114 @@ window.mergeDuplicates = async function(groupIndex) {
 function closeDuplicatesModal() {
     document.getElementById('duplicatesModal').style.display = 'none';
 }
+
+// ========================================
+// 记忆编辑和删除功能
+// ========================================
+
+// 编辑记忆
+window.editMemory = async function(id) {
+    // 查找当前记忆
+    const response = await fetch('/api/memory', { headers: getAuthHeaders() });
+    const data = await response.json();
+    if (!data.success) {
+        showToast('加载记忆失败');
+        return;
+    }
+    
+    const memory = data.memory.find(m => m.id === id);
+    if (!memory) {
+        showToast('记忆不存在');
+        return;
+    }
+    
+    // 创建编辑弹窗
+    const modal = document.createElement('div');
+    modal.className = 'modal';
+    modal.style.display = 'flex';
+    modal.innerHTML = `
+        <div class="modal-content" style="max-width: 600px;">
+            <div class="modal-header">
+                <h3>编辑记忆</h3>
+                <button class="modal-close" onclick="this.closest('.modal').remove()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label>原文</label>
+                    <textarea id="editMemorySource" rows="4" style="width: 100%; padding: 8px; border: 1px solid var(--border-default); border-radius: 4px; background: var(--bg-surface); color: var(--text-body); font-family: inherit;">${escapeHtml(memory.source || memory.original)}</textarea>
+                </div>
+                <div class="form-group" style="margin-top: 16px;">
+                    <label>译文</label>
+                    <textarea id="editMemoryTarget" rows="4" style="width: 100%; padding: 8px; border: 1px solid var(--border-default); border-radius: 4px; background: var(--bg-surface); color: var(--text-body); font-family: inherit;">${escapeHtml(memory.target || memory.translation)}</textarea>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" onclick="this.closest('.modal').remove()">取消</button>
+                <button class="btn btn-primary" onclick="saveMemoryEdit(${id})">保存</button>
+            </div>
+        </div>
+    `;
+    document.body.appendChild(modal);
+};
+
+// 保存编辑的记忆
+window.saveMemoryEdit = async function(id) {
+    const source = document.getElementById('editMemorySource').value.trim();
+    const target = document.getElementById('editMemoryTarget').value.trim();
+    
+    if (!source || !target) {
+        showToast('原文和译文不能为空');
+        return;
+    }
+    
+    try {
+        const response = await fetch(`/api/memory/${id}`, {
+            method: 'PUT',
+            headers: {
+                'Content-Type': 'application/json',
+                ...getAuthHeaders()
+            },
+            body: JSON.stringify({ source, target })
+        });
+        
+        const data = await response.json();
+        if (data.success) {
+            showToast('记忆更新成功');
+            document.querySelector('.modal').remove();
+            loadMemory();
+        } else {
+            showToast(data.error || '更新失败');
+        }
+    } catch (error) {
+        console.error('更新记忆失败:', error);
+        showToast('更新失败，请重试');
+    }
+};
+
+// 删除记忆
+window.deleteMemory = async function(id) {
+    if (!confirm('确定要删除这条记忆吗？')) {
+        return;
+    }
+    
+    try {
+        const response = await fetch(`/api/memory/${id}`, {
+            method: 'DELETE',
+            headers: getAuthHeaders()
+        });
+        
+        const data = await response.json();
+        if (data.success) {
+            showToast('记忆删除成功');
+            loadMemory();
+        } else {
+            showToast(data.error || '删除失败');
+        }
+    } catch (error) {
+        console.error('删除记忆失败:', error);
+        showToast('删除失败，请重试');
+    }
+};
 
 // ========================================
 // 文本翻译功能
@@ -2323,6 +2501,7 @@ async function doLogin() {
 async function doRegister() {
     const username = document.getElementById('registerUsername').value.trim();
     const password = document.getElementById('registerPassword').value;
+    const passwordConfirm = document.getElementById('registerPasswordConfirm').value;
     const email = document.getElementById('registerEmail').value.trim();
     const errorEl = document.getElementById('registerError');
 
@@ -2333,6 +2512,11 @@ async function doRegister() {
 
     if (password.length < 6) {
         errorEl.textContent = '密码至少需要6个字符';
+        return;
+    }
+
+    if (password !== passwordConfirm) {
+        errorEl.textContent = '两次输入的密码不一致';
         return;
     }
 
@@ -2969,6 +3153,20 @@ let statsChart = null;
 let currentStatsType = 'users';
 let currentStatsPage = 1;
 let currentStatsDays = 7;
+
+// 格式化日期
+function formatDate(dateStr) {
+    if (!dateStr) return '-';
+    const date = new Date(dateStr);
+    if (isNaN(date.getTime())) return dateStr;
+    return date.toLocaleString('zh-CN', {
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit'
+    });
+}
 
 async function loadStatsView() {
     await loadStatsOverview();
