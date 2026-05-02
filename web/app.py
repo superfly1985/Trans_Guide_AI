@@ -556,6 +556,26 @@ def get_current_user():
         return jsonify({'success': False, 'error': str(e)})
 
 
+@app.route('/api/auth/refresh', methods=['POST'])
+def refresh_auth():
+    """通过refresh_token自动登录"""
+    try:
+        data = request.json
+        refresh_token = data.get('refresh_token', '').strip()
+
+        if not refresh_token:
+            return jsonify({'success': False, 'error': '缺少refresh_token'})
+
+        user = user_db.refresh_token_login(refresh_token)
+        if not user:
+            return jsonify({'success': False, 'error': '登录已过期，请重新登录'})
+
+        return jsonify({'success': True, 'user': user, 'message': '自动登录成功'})
+    except Exception as e:
+        logger.error(f"刷新登录失败: {e}")
+        return jsonify({'success': False, 'error': str(e)})
+
+
 @app.route('/api/user/settings', methods=['PUT'])
 @login_required
 def update_user_settings():

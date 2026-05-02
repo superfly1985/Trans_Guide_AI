@@ -25,6 +25,7 @@ const state = {
     // 用户认证状态
     user: JSON.parse(localStorage.getItem('user') || 'null'),
     authToken: localStorage.getItem('authToken') || null,
+    refreshToken: localStorage.getItem('refreshToken') || null,
     // 历史记录状态
     historyPage: 1,
     historyLimit: 10,
@@ -123,7 +124,7 @@ async function init() {
     updateTranslationPlaceholder();
 
     // 初始化用户状态
-    initUserState();
+    await initUserState();
 
     // 绑定事件
     bindEvents();
@@ -154,11 +155,40 @@ async function loadVersionInfo() {
 }
 
 // 初始化用户状态
-function initUserState() {
+async function initUserState() {
     if (state.user) {
         updateUserUI();
+    } else if (state.refreshToken) {
+        await tryAutoLogin();
     } else {
         // 未登录，强制显示登录窗口
+        showAuthModal(true);
+    }
+}
+
+// 尝试通过refresh_token自动登录
+async function tryAutoLogin() {
+    try {
+        const response = await fetch('/api/auth/refresh', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ refresh_token: state.refreshToken })
+        });
+        const data = await response.json();
+        if (data.success) {
+            state.user = data.user;
+            localStorage.setItem('user', JSON.stringify(data.user));
+            localStorage.setItem('userId', data.user.id);
+            updateUserUI();
+            loadStats();
+        } else {
+            // refresh_token已过期，清除并提示登录
+            state.refreshToken = null;
+            localStorage.removeItem('refreshToken');
+            showAuthModal(true);
+        }
+    } catch (error) {
+        console.error('自动登录失败:', error);
         showAuthModal(true);
     }
 }
@@ -2481,8 +2511,10 @@ async function doLogin() {
 
         if (data.success) {
             state.user = data.user;
+            state.refreshToken = data.refresh_token;
             localStorage.setItem('user', JSON.stringify(data.user));
             localStorage.setItem('userId', data.user.id);
+            localStorage.setItem('refreshToken', data.refresh_token);
             updateUserUI();
             // 移除强制显示类，允许关闭
             document.getElementById('authModal').classList.remove('auth-modal-forced');
@@ -2543,8 +2575,10 @@ async function doRegister() {
 
 function logout() {
     state.user = null;
+    state.refreshToken = null;
     localStorage.removeItem('user');
     localStorage.removeItem('userId');
+    localStorage.removeItem('refreshToken');
     updateUserUI();
     showToast('已退出登录');
 }
