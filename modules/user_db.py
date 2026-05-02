@@ -46,7 +46,8 @@ class UserDatabase:
                 login_count INTEGER DEFAULT 0,
                 approved_by INTEGER,
                 approved_at TIMESTAMP,
-                reject_reason TEXT
+                reject_reason TEXT,
+                refresh_token TEXT
             )
         """)
 
@@ -197,6 +198,12 @@ class UserDatabase:
             CREATE INDEX IF NOT EXISTS idx_term_feedback_created ON term_feedback(created_at)
         """)
 
+        # 迁移：为旧数据库添加 refresh_token 列
+        cursor.execute("PRAGMA table_info(users)")
+        columns = [row[1] for row in cursor.fetchall()]
+        if 'refresh_token' not in columns:
+            cursor.execute("ALTER TABLE users ADD COLUMN refresh_token TEXT")
+
         conn.commit()
 
         # 创建默认管理员账号（如果不存在）
@@ -330,10 +337,11 @@ class UserDatabase:
             conn.close()
             return {'success': False, 'message': '账号已被禁用，请联系管理员'}
 
-        # 更新最后登录时间
+        # 更新最后登录时间和refresh_token
+        refresh_token = secrets.token_hex(32)
         cursor.execute("""
-            UPDATE users SET last_login = ? WHERE id = ?
-        """, (datetime.now(), user['id']))
+            UPDATE users SET last_login = ?, refresh_token = ? WHERE id = ?
+        """, (datetime.now(), refresh_token, user['id']))
 
         # 记录登录日志
         cursor.execute("""
@@ -351,8 +359,23 @@ class UserDatabase:
         return {
             'success': True,
             'message': '登录成功',
-            'user': user
+            'user': user,
+            'refresh_token': refresh_token
         }
+
+    def refresh_token_login(self, refresh_token: str) -> Optional[Dict]:
+        """通过refresh_token获取用户信息，实现自动登录"""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT id, username, email, role, status, last_login
+            FROM users WHERE refresh_token = ? AND status = 'approved'
+        """, (refresh_token,))
+        row = cursor.fetchone()
+        conn.close()
+        if row:
+            return dict(row)
+        return None
 
     def approve_user(self, user_id: int, admin_id: int, reason: str = "") -> Dict:
         """

@@ -36,7 +36,7 @@ class ConfigManager:
         "storage": {
             "db_path": "./data/trans_guide.db",
             "chroma_path": "./data/chroma_db",
-            "log_path": "./data/trans_guide.log"
+            "log_path": "./web/logs/web.log"
         },
         "extraction": {
             "term_batch_size": 20,
