@@ -1,7 +1,7 @@
 """
 TransGuide Web 应用
 提供翻译服务的 Web 界面
-后端版本: v1.2.0 - 权限系统优化
+后端版本: v1.3.2 - ChromaDB异步同步
 """
 
 import os
@@ -18,7 +18,7 @@ from flask import Flask, render_template, request, jsonify, send_file
 from werkzeug.utils import secure_filename
 
 # 版本信息
-APP_VERSION = 'v1.2.0'
+APP_VERSION = 'v1.3.2'
 CSS_VERSION = 'v2.2'
 BUILD_TIME = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
@@ -41,6 +41,7 @@ from modules.logger import setup_logger
 from modules.user_db import UserDatabase
 from modules.bilingual_detector import detect_bilingual_pairs, BilingualDetector
 from modules.llm_term_extractor import extract_terms_with_llm, LLMTermExtractor
+from modules.chroma_worker import get_chroma_worker
 
 app = Flask(__name__)
 app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024  # 50MB
@@ -63,6 +64,9 @@ OUTPUT_DIR.mkdir(exist_ok=True)
 term_db = TermDatabase(str(DATA_DIR / 'terms.db'))
 tm_db = TMDatabase(str(DATA_DIR / 'tm.db'))
 user_db = UserDatabase(str(DATA_DIR / 'users.db'))
+
+# 初始化 ChromaDB 后台同步工作器
+chroma_worker = get_chroma_worker(tm_db)
 
 
 # 全局 LLM 客户端（延迟初始化）
@@ -858,7 +862,8 @@ def get_stats():
                 'terms_count': terms_count,
                 'tm_count': tm_stats.get('total_segments', 0),
                 'duplicates': tm_stats.get('duplicate_segments', 0),
-                'source_files': tm_stats.get('source_files', 0)
+                'source_files': tm_stats.get('source_files', 0),
+                'pending_sync': tm_stats.get('pending_sync', 0)
             }
         })
     except Exception as e:
@@ -1121,7 +1126,6 @@ def get_admin_stats_detail():
 # ========================================
 
 @app.route('/api/import/upload', methods=['POST'])
-@login_required
 def upload_import_file():
     """上传历史翻译文件进行分析"""
     # ========== 检查1: 添加详细日志确认执行路径 ==========
@@ -1274,19 +1278,28 @@ def process_import():
                     if success:
                         imported_terms += 1
         
-        # 可选：导入翻译记忆（句段对）
+        # 快速导入翻译记忆（只写SQLite，跳过ChromaDB）
         imported_segments = 0
+        new_segment_ids = []
         if selected_pairs:
             segments = [(pair['source'], pair['target']) for pair in selected_pairs[:50]]
-            tm_stats = tm_db.add_segments_batch(segments, filename)
-            imported_segments = tm_stats.get('added', 0) + tm_stats.get('updated', 0)
+            tm_stats, new_segment_ids = tm_db.add_segments_batch_fast(segments, filename)
+            imported_segments = tm_stats.get('added', 0)
+            
+            # 提交异步任务：后台同步到 ChromaDB
+            if new_segment_ids and chroma_worker:
+                chroma_worker.submit(new_segment_ids, callback=lambda synced: 
+                    logger.info(f"ChromaDB 后台同步完成: {synced} 个句段")
+                )
+                logger.info(f"已提交 {len(new_segment_ids)} 个句段到 ChromaDB 后台同步队列")
         
-        logger.info(f"导入完成: {imported_terms} 术语, {imported_segments} 句段")
+        logger.info(f"导入完成: {imported_terms} 术语, {imported_segments} 句段 (ChromaDB 后台同步中)")
         
         return jsonify({
             'success': True,
             'imported_terms': imported_terms,
-            'imported_segments': imported_segments
+            'imported_segments': imported_segments,
+            'chroma_sync_pending': len(new_segment_ids)
         })
         
     except Exception as e:
@@ -1480,7 +1493,6 @@ def delete_memory(memory_id):
 # ========================================
 
 @app.route('/api/translate/text', methods=['POST'])
-@login_required
 def translate_text():
     """翻译文本"""
     try:
@@ -1590,7 +1602,6 @@ def translate_text():
 
 
 @app.route('/api/translate/batch', methods=['POST'])
-@login_required
 def translate_batch():
     """批量翻译文本"""
     try:
@@ -1829,7 +1840,6 @@ English translation 2
 # ========================================
 
 @app.route('/api/upload', methods=['POST'])
-@login_required
 def upload_file():
     """上传待翻译文件"""
     try:
@@ -1892,7 +1902,6 @@ def upload_file():
 
 
 @app.route('/api/translate/file', methods=['POST'])
-@login_required
 def translate_file():
     """翻译文件 - 重新解析完整文件并应用翻译，并记录历史"""
     try:
@@ -1903,9 +1912,10 @@ def translate_file():
         mode = data.get('mode', 'bilingual')
 
         # 获取当前用户信息
-        user_id = int(request.headers.get('X-User-ID', 0))
-        user = user_db.get_user_by_id(user_id)
-        username = user['username'] if user else 'unknown'
+        user_id_str = request.headers.get('X-User-ID', '0')
+        user_id = int(user_id_str) if user_id_str.isdigit() and int(user_id_str) > 0 else 0
+        user = user_db.get_user_by_id(user_id) if user_id > 0 else None
+        username = user['username'] if user else '游客'
 
         logger.info(f"导出文件请求: {filename}, 原始文件名: {original_filename}, 翻译条目数: {len(translations)}, 用户: {username}")
 
@@ -1973,20 +1983,22 @@ def translate_file():
         file_type = ext[1:] if ext.startswith('.') else ext
         is_china_sheet = data.get('is_china_sheet', False)
 
-        # 创建历史记录（状态为 processing）
-        record_id = user_db.create_translation_record(
-            user_id=user_id,
-            username=username,
-            original_filename=original_filename,
-            output_filename=output_filename,
-            file_type=file_type,
-            summary=summary,
-            block_count=len(all_blocks),
-            total_chars=total_chars,
-            mode=mode,
-            file_path=str(output_path)
-        )
-        logger.info(f"[导出调试] 创建历史记录 ID: {record_id}")
+        # 创建历史记录（仅登录用户）
+        record_id = None
+        if user_id > 0:
+            record_id = user_db.create_translation_record(
+                user_id=user_id,
+                username=username,
+                original_filename=original_filename,
+                output_filename=output_filename,
+                file_type=file_type,
+                summary=summary,
+                block_count=len(all_blocks),
+                total_chars=total_chars,
+                mode=mode,
+                file_path=str(output_path)
+            )
+            logger.info(f"[导出调试] 创建历史记录 ID: {record_id}")
 
         try:
             # 执行导出
@@ -2021,7 +2033,8 @@ def translate_file():
                     filepath, full_translation_map, str(output_path), mode
                 )
             else:
-                user_db.complete_translation_record(record_id, 0, '不支持的文件类型')
+                if record_id:
+                    user_db.complete_translation_record(record_id, 0, '不支持的文件类型')
                 return jsonify({'success': False, 'error': '不支持的文件类型'})
 
             if success:
@@ -2032,7 +2045,8 @@ def translate_file():
                 chinese_summary = extract_summary(all_blocks, full_translation_map, max_chars=50)
                 logger.info(f"[导出调试] 中文摘要: {chinese_summary}")
 
-                user_db.complete_translation_record(record_id, file_size, summary=chinese_summary)
+                if record_id:
+                    user_db.complete_translation_record(record_id, file_size, summary=chinese_summary)
                 logger.info(f"[导出调试] 翻译完成，文件大小: {file_size} 字节")
 
                 return jsonify({
@@ -2041,11 +2055,13 @@ def translate_file():
                     'history_id': record_id
                 })
             else:
-                user_db.complete_translation_record(record_id, 0, '导出失败')
+                if record_id:
+                    user_db.complete_translation_record(record_id, 0, '导出失败')
                 return jsonify({'success': False, 'error': '导出失败'})
 
         except Exception as export_error:
-            user_db.complete_translation_record(record_id, 0, str(export_error))
+            if record_id:
+                user_db.complete_translation_record(record_id, 0, str(export_error))
             raise
 
     except Exception as e:
@@ -2056,7 +2072,6 @@ def translate_file():
 
 
 @app.route('/api/download/<filename>')
-@login_required
 def download_file(filename):
     """下载翻译后的文件"""
     try:

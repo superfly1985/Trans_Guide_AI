@@ -95,6 +95,13 @@ class TMDatabase:
                     ADD COLUMN quality_score REAL DEFAULT 1.0
                 """)
                 print("迁移: 添加 quality_score 列")
+            
+            if 'chroma_synced' not in columns:
+                cursor.execute("""
+                    ALTER TABLE translation_memory 
+                    ADD COLUMN chroma_synced INTEGER DEFAULT 1
+                """)
+                print("迁移: 添加 chroma_synced 列")
                 
         except Exception as e:
             print(f"数据库迁移失败: {e}")
@@ -283,6 +290,34 @@ class TMDatabase:
         finally:
             conn.close()
     
+    def add_segment_fast(
+        self,
+        original: str,
+        translation: str,
+        source_file: str = ""
+    ) -> Tuple[bool, int]:
+        """
+        快速添加句段到SQLite（跳过ChromaDB，用于异步导入）
+        
+        Returns:
+            (是否成功, 句段ID)
+        """
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        try:
+            cursor.execute("""
+                INSERT INTO translation_memory (original, translation, source_file, updated_at, chroma_synced)
+                VALUES (?, ?, ?, ?, 0)
+            """, (original, translation, source_file, datetime.now()))
+            segment_id = cursor.lastrowid
+            conn.commit()
+            return True, segment_id
+        except Exception as e:
+            print(f"快速添加句段失败: {e}")
+            return False, -1
+        finally:
+            conn.close()
+
     def add_segments_batch(
         self,
         segments: List[tuple],
@@ -306,6 +341,95 @@ class TMDatabase:
                 stats[status] += 1
         
         return stats
+
+    def add_segments_batch_fast(
+        self,
+        segments: List[tuple],
+        source_file: str = ""
+    ) -> Tuple[Dict[str, int], List[int]]:
+        """
+        批量快速添加句段（只写SQLite，返回新入库的ID列表供后续异步Chroma编码）
+        
+        Args:
+            segments: 句段列表 [(原文, 译文), ...]
+            source_file: 来源文件
+            
+        Returns:
+            (统计信息, 新入库句段ID列表)
+        """
+        stats = {"added": 0, "skipped": 0}
+        new_ids = []
+        
+        for original, translation in segments:
+            success, segment_id = self.add_segment_fast(original, translation, source_file)
+            if success and segment_id > 0:
+                stats["added"] += 1
+                new_ids.append(segment_id)
+            else:
+                stats["skipped"] += 1
+        
+        return stats, new_ids
+
+    def sync_to_chroma(self, segment_ids: List[int]) -> int:
+        """
+        将指定句段同步到ChromaDB（异步任务调用）
+        
+        Args:
+            segment_ids: 句段ID列表
+            
+        Returns:
+            成功同步数量
+        """
+        if not self.collection or not segment_ids:
+            return 0
+        
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        synced_ids = []
+        
+        try:
+            # 分批查询（避免SQL参数过多）
+            batch_size = 100
+            for i in range(0, len(segment_ids), batch_size):
+                batch_ids = segment_ids[i:i + batch_size]
+                placeholders = ','.join('?' * len(batch_ids))
+                cursor.execute(f"""
+                    SELECT id, original, translation, source_file
+                    FROM translation_memory
+                    WHERE id IN ({placeholders})
+                """, batch_ids)
+                rows = cursor.fetchall()
+                
+                for row in rows:
+                    try:
+                        self.collection.add(
+                            ids=[str(row["id"])],
+                            documents=[row["original"]],
+                            metadatas=[{
+                                "translation": row["translation"],
+                                "source_file": row["source_file"] or ""
+                            }]
+                        )
+                        synced_ids.append(row["id"])
+                    except Exception as e:
+                        print(f"同步句段 {row['id']} 到Chroma失败: {e}")
+            
+            # 更新已同步标记
+            if synced_ids:
+                placeholders = ','.join('?' * len(synced_ids))
+                cursor.execute(f"""
+                    UPDATE translation_memory 
+                    SET chroma_synced = 1, updated_at = ?
+                    WHERE id IN ({placeholders})
+                """, (datetime.now(), *synced_ids))
+                conn.commit()
+                
+        except Exception as e:
+            print(f"批量同步到Chroma失败: {e}")
+        finally:
+            conn.close()
+        
+        return len(synced_ids)
     
     def search_similar(
         self,
@@ -597,13 +721,20 @@ class TMDatabase:
             cursor.execute("SELECT COUNT(DISTINCT source_file) as count FROM translation_memory")
             source_files = cursor.fetchone()["count"]
             
+            # 未同步到Chroma的句段数
+            pending_sync = 0
+            if "chroma_synced" in columns:
+                cursor.execute("SELECT COUNT(*) as count FROM translation_memory WHERE chroma_synced = 0")
+                pending_sync = cursor.fetchone()["count"]
+            
             conn.close()
             
             return {
                 "total_segments": total_segments,
                 "duplicate_segments": duplicate_segments,
                 "source_files": source_files,
-                "avg_duplicates": round(avg_duplicates, 2)
+                "avg_duplicates": round(avg_duplicates, 2),
+                "pending_sync": pending_sync
             }
         except Exception as e:
             conn.close()

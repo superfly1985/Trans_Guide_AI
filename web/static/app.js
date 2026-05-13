@@ -1,11 +1,11 @@
 /**
  * TransGuide Web 应用
  * 极简风格的翻译工具
- * 前端版本: v1.1.0 - 支持 Excel/PPT
+ * 前端版本: v1.3.2 - ChromaDB异步同步
  */
 
 // 版本信息
-const APP_VERSION = 'v1.1.0';
+const APP_VERSION = 'v1.3.2';
 const FRONTEND_BUILD_TIME = new Date().toISOString();
 console.log(`[版本信息] 前端版本: ${APP_VERSION}, 构建时间: ${FRONTEND_BUILD_TIME}`);
 
@@ -26,6 +26,8 @@ const state = {
     user: JSON.parse(localStorage.getItem('user') || 'null'),
     authToken: localStorage.getItem('authToken') || null,
     refreshToken: localStorage.getItem('refreshToken') || null,
+    guestCount: parseInt(localStorage.getItem('guestCount') || '0'),
+    maxGuestCount: 5,
     // 历史记录状态
     historyPage: 1,
     historyLimit: 10,
@@ -52,6 +54,7 @@ const elements = {
     views: document.querySelectorAll('.view'),
     termsCount: document.getElementById('termsCount'),
     tmCount: document.getElementById('tmCount'),
+    syncCount: document.getElementById('syncCount'),
     toast: document.getElementById('toast'),
     
     // 导入功能
@@ -161,8 +164,9 @@ async function initUserState() {
     } else if (state.refreshToken) {
         await tryAutoLogin();
     } else {
-        // 未登录，强制显示登录窗口
-        showAuthModal(true);
+        // 游客模式：默认显示文本翻译，不强制登录
+        updateUserUI();
+        switchView('translate');
     }
 }
 
@@ -593,6 +597,12 @@ function debounce(func, wait) {
 // ========================================
 
 function switchView(viewName) {
+    // 游客只能访问文本翻译、文件翻译
+    if (!state.user && !['translate', 'files'].includes(viewName)) {
+        showToast('请先登录以访问此功能');
+        return;
+    }
+
     state.currentView = viewName;
 
     // 更新导航
@@ -626,6 +636,39 @@ function switchView(viewName) {
 // 统计数据
 // ========================================
 
+let syncPollingInterval = null;
+
+function startSyncPolling() {
+    // 如果已有轮询，先清除
+    if (syncPollingInterval) {
+        clearInterval(syncPollingInterval);
+    }
+    
+    // 立即刷新一次
+    loadStats();
+    
+    // 每 5 秒轮询一次
+    syncPollingInterval = setInterval(async () => {
+        await loadStats();
+        
+        // 检查是否全部同步完成
+        const pendingCount = parseInt(elements.syncCount.textContent) || 0;
+        if (pendingCount === 0) {
+            clearInterval(syncPollingInterval);
+            syncPollingInterval = null;
+            showToast('向量编码全部完成！');
+        }
+    }, 5000);
+    
+    // 60 秒后自动停止轮询（防止无限轮询）
+    setTimeout(() => {
+        if (syncPollingInterval) {
+            clearInterval(syncPollingInterval);
+            syncPollingInterval = null;
+        }
+    }, 60000);
+}
+
 async function loadStats() {
     // 检查是否已登录
     if (!state.user) {
@@ -649,6 +692,7 @@ async function loadStats() {
         if (data.success && data.stats) {
             elements.termsCount.textContent = data.stats.terms_count || 0;
             elements.tmCount.textContent = data.stats.tm_count || 0;
+            elements.syncCount.textContent = data.stats.pending_sync || 0;
         }
     } catch (error) {
         console.error('加载统计失败:', error);
@@ -844,7 +888,13 @@ async function processImport() {
             elements.importedTerms.textContent = data.imported_terms;
             elements.importedSegments.textContent = data.imported_segments;
             
-            showToast('导入完成！');
+            // 如果有后台同步任务，显示状态并启动轮询
+            if (data.chroma_sync_pending > 0) {
+                showToast(`导入完成！${data.chroma_sync_pending} 条句段向量编码中...`);
+                startSyncPolling();
+            } else {
+                showToast('导入完成！');
+            }
             
             // 刷新统计数据
             loadStats();
@@ -1300,14 +1350,20 @@ async function batchImportFiles(files) {
                     if (importData.success) {
                         fileItem.classList.remove('processing');
                         fileItem.classList.add('success');
-                        fileItem.querySelector('.file-status').textContent =
-                            `✓ 术语${importData.imported_terms} 句段${importData.imported_segments}`;
+                        
+                        // 如果有后台同步，显示编码中状态
+                        let statusText = `✓ 术语${importData.imported_terms} 句段${importData.imported_segments}`;
+                        if (importData.chroma_sync_pending > 0) {
+                            statusText += ` (编码中${importData.chroma_sync_pending})`;
+                        }
+                        fileItem.querySelector('.file-status').textContent = statusText;
 
                         results.push({
                             filename: file.name,
                             success: true,
                             terms: importData.imported_terms,
-                            segments: importData.imported_segments
+                            segments: importData.imported_segments,
+                            pending_sync: importData.chroma_sync_pending || 0
                         });
                     } else {
                         throw new Error(importData.error);
@@ -1339,6 +1395,12 @@ async function batchImportFiles(files) {
 
         // 刷新统计数据
         loadStats();
+        
+        // 如果有后台同步任务，启动轮询
+        const totalPendingSync = results.filter(r => r.success).reduce((sum, r) => sum + (r.pending_sync || 0), 0);
+        if (totalPendingSync > 0) {
+            startSyncPolling();
+        }
     }
 
 function showBatchImportResults(results) {
@@ -1777,6 +1839,20 @@ window.deleteMemory = async function(id) {
 // 文本翻译功能
 // ========================================
 
+// 检查游客体验次数
+function checkGuestLimit() {
+    if (state.user) return true;
+    state.guestCount++;
+    localStorage.setItem('guestCount', state.guestCount);
+    updateUserUI();
+    if (state.guestCount >= state.maxGuestCount) {
+        showToast('体验次数已用完，请登录/注册');
+        setTimeout(() => showAuthModal(true), 500);
+        return false;
+    }
+    return true;
+}
+
 async function translateText() {
     const text = elements.sourceText.value.trim();
     if (!text) {
@@ -1793,10 +1869,7 @@ async function translateText() {
     try {
         const response = await fetch('/api/translate/text', {
             method: 'POST',
-            headers: { 
-                'Content-Type': 'application/json',
-                'X-User-ID': state.user.id
-            },
+            headers: getAuthHeaders(),
             body: JSON.stringify({ 
                 text,
                 direction: state.translationDirection || 'en2zh'
@@ -1827,6 +1900,11 @@ async function translateText() {
                     sourceText = '';
             }
             elements.translationSource.textContent = sourceText;
+
+            // 游客翻译计数
+            if (!state.user && data.source === 'llm') {
+                checkGuestLimit();
+            }
         } else {
             showToast('翻译失败: ' + data.error);
         }
@@ -1866,13 +1944,11 @@ async function uploadTranslationFile(file) {
     
     try {
         console.log('[前端调试] 发送请求到 /api/upload');
-        const response = await fetch('/api/upload', {
-            method: 'POST',
-            headers: {
-                'X-User-ID': state.user.id
-            },
-            body: formData
-        });
+        const fetchOptions = { method: 'POST', body: formData };
+        if (state.user && state.user.id) {
+            fetchOptions.headers = { 'X-User-ID': state.user.id };
+        }
+        const response = await fetch('/api/upload', fetchOptions);
         
         console.log('[前端调试] 响应状态:', response.status);
         const data = await response.json();
@@ -2102,9 +2178,11 @@ async function downloadTranslatedFile() {
             ? state.downloadUrl
             : window.location.origin + state.downloadUrl;
 
-        // 添加user_id参数
-        const separator = fullUrl.includes('?') ? '&' : '?';
-        fullUrl += `${separator}user_id=${state.user.id}`;
+        // 添加user_id参数（仅登录用户）
+        if (state.user && state.user.id) {
+            const separator = fullUrl.includes('?') ? '&' : '?';
+            fullUrl += `${separator}user_id=${state.user.id}`;
+        }
 
         // 创建一个临时的iframe来下载（避免页面跳转）
         const iframe = document.createElement('iframe');
@@ -2191,10 +2269,7 @@ async function translateFile() {
             const startTime = performance.now();
             const response = await fetch('/api/translate/batch', {
                 method: 'POST',
-                headers: { 
-                    'Content-Type': 'application/json',
-                    'X-User-ID': state.user.id
-                },
+                headers: getAuthHeaders(),
                 body: JSON.stringify(requestBody)
             });
             const endTime = performance.now();
@@ -2298,10 +2373,7 @@ async function translateFile() {
     try {
         const response = await fetch('/api/translate/file', {
             method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'X-User-ID': state.user.id
-            },
+            headers: getAuthHeaders(),
             body: JSON.stringify({
                 filename: state.uploadedFile,  // 存储用的文件名（带时间戳）
                 original_filename: state.originalFilename,  // 原始文件名
@@ -2316,6 +2388,9 @@ async function translateFile() {
         
         if (data.success) {
             showToast('翻译完成！');
+
+            // 游客翻译计数
+            if (!state.user) checkGuestLimit();
             
             // 启用下载按钮
             if (elements.downloadBtn) {
@@ -2383,6 +2458,7 @@ function debounce(func, wait) {
 // ========================================
 
 function updateUserUI() {
+    const userRemainingEl = document.getElementById('guestRemaining');
     if (state.user) {
         elements.userInfo.style.display = 'flex';
         elements.userName.textContent = state.user.username;
@@ -2399,20 +2475,28 @@ function updateUserUI() {
         elements.loginBtn.textContent = '退出';
         elements.loginBtn.onclick = logout;
 
+        // 隐藏游客提示
+        if (userRemainingEl) userRemainingEl.style.display = 'none';
+
         // 根据角色显示对应的管理入口
-        // admin: 显示用户管理和统计面板
-        // manager: 只显示统计面板
-        // user: 不显示系统管理
         if (state.user.role === 'admin') {
-            addAdminMenuItem(true); // true = 显示用户管理
+            addAdminMenuItem(true);
         } else if (state.user.role === 'manager') {
-            addAdminMenuItem(false); // false = 只显示统计面板
+            addAdminMenuItem(false);
         }
     } else {
+        // 游客模式
         elements.userInfo.style.display = 'none';
         elements.loginBtn.textContent = '登录';
         elements.loginBtn.onclick = showAuthModal;
         removeAdminMenuItem();
+
+        // 显示剩余体验次数
+        const remaining = state.maxGuestCount - state.guestCount;
+        if (userRemainingEl) {
+            userRemainingEl.textContent = `可体验 ${Math.max(0, remaining)} 次`;
+            userRemainingEl.style.display = 'block';
+        }
     }
 }
 
@@ -2515,6 +2599,8 @@ async function doLogin() {
             localStorage.setItem('user', JSON.stringify(data.user));
             localStorage.setItem('userId', data.user.id);
             localStorage.setItem('refreshToken', data.refresh_token);
+            localStorage.removeItem('guestCount');
+            state.guestCount = 0;
             updateUserUI();
             // 移除强制显示类，允许关闭
             document.getElementById('authModal').classList.remove('auth-modal-forced');
@@ -2562,6 +2648,8 @@ async function doRegister() {
         const data = await response.json();
 
         if (data.success) {
+            localStorage.removeItem('guestCount');
+            state.guestCount = 0;
             showToast(data.message);
             switchAuthTab('login');
             document.getElementById('loginUsername').value = username;
@@ -3708,8 +3796,10 @@ window.downloadHistoryFile = async function(filename) {
         const downloadUrl = `/api/download/${encodeURIComponent(filename)}`;
         let fullUrl = window.location.origin + downloadUrl;
 
-        // 添加user_id参数用于认证
-        fullUrl += `?user_id=${state.user.id}`;
+        // 添加user_id参数用于认证（仅登录用户）
+        if (state.user && state.user.id) {
+            fullUrl += `?user_id=${state.user.id}`;
+        }
 
         // 创建隐藏的iframe来下载
         const iframe = document.createElement('iframe');
