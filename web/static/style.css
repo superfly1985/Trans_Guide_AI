@@ -750,6 +750,17 @@ html, body {
     height: 28px;
 }
 
+.guest-remaining {
+    font-size: 11px;
+    color: #f97316;
+    display: block;
+    text-align: center;
+    margin-bottom: 6px;
+    padding: 2px 0;
+    border-radius: 4px;
+    background: rgba(249, 115, 22, 0.1);
+}
+
 .btn-sm {
     padding: 4px 10px;
     font-size: 12px;
