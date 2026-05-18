@@ -96,6 +96,11 @@ const elements = {
     batchSize: document.getElementById('batchSize'),
     downloadBtn: document.getElementById('downloadBtn'),
     translatingOverlay: document.getElementById('translatingOverlay'),
+    translatingText: document.getElementById('translatingText'),
+    translatingSubtext: document.getElementById('translatingSubtext'),
+    translatingProgressBar: document.getElementById('translatingProgressBar'),
+    translatingProgressFill: document.getElementById('translatingProgressFill'),
+    translatingProgressText: document.getElementById('translatingProgressText'),
     textTranslatingOverlay: document.getElementById('textTranslatingOverlay'),
 
     // 历史记录
@@ -1937,10 +1942,32 @@ async function uploadTranslationFile(file) {
     console.log('[前端调试] 文件类型:', file.type);
     console.log('[前端调试] 文件大小:', file.size);
     
+    const ext = file.name.split('.').pop().toLowerCase();
+    if (ext === 'doc') {
+        showToast('不支持 .doc 格式，请先将文件另存为 .docx 格式后再上传');
+        return;
+    }
+    if (ext === 'xls') {
+        showToast('不支持 .xls 格式，请先将文件另存为 .xlsx 格式后再上传');
+        return;
+    }
+    if (ext === 'ppt') {
+        showToast('不支持 .ppt 格式，请先将文件另存为 .pptx 格式后再上传');
+        return;
+    }
+    
     const formData = new FormData();
     formData.append('file', file);
     
-    showToast('正在解析文件...');
+    // 显示解析遮罩
+    if (elements.translatingOverlay) {
+        elements.translatingText.textContent = '正在解析文件...';
+        elements.translatingSubtext.textContent = '提取文本内容中，请稍候';
+        elements.translatingProgressBar.style.display = 'none';
+        elements.translatingProgressText.style.display = 'none';
+        elements.translatingProgressFill.style.width = '0%';
+        elements.translatingOverlay.style.display = 'flex';
+    }
     
     try {
         console.log('[前端调试] 发送请求到 /api/upload');
@@ -1962,6 +1989,17 @@ async function uploadTranslationFile(file) {
             state.indexMapping = data.index_mapping || {}; // 保存坐标映射
             state.downloadUrl = null; // 重置下载URL
             state.isChinaSheet = data.is_china_sheet || false; // 保存特殊结构标记
+            
+            elements.translateFileBtn.disabled = false;
+            elements.translateFileBtn.textContent = '翻译文件';
+            
+            // 重置下载按钮为禁用状态
+            if (elements.downloadBtn) {
+                elements.downloadBtn.style.opacity = '0.5';
+                elements.downloadBtn.style.pointerEvents = 'none';
+                elements.downloadBtn.disabled = true;
+                state.downloadUrl = null;
+            }
 
             console.log('[前端调试] 存储文件名:', state.uploadedFile);
             console.log('[前端调试] 原始文件名:', state.originalFilename);
@@ -1977,6 +2015,11 @@ async function uploadTranslationFile(file) {
     } catch (error) {
         console.error('[前端调试] 上传异常:', error);
         showToast('上传失败，请检查网络连接');
+    }
+    
+    // 隐藏解析遮罩
+    if (elements.translatingOverlay) {
+        elements.translatingOverlay.style.display = 'none';
     }
     console.log('[前端调试] ========== 上传结束 ==========');
 }
@@ -1997,6 +2040,7 @@ function renderFilePreview(filename, blocks) {
     if (elements.downloadBtn) {
         elements.downloadBtn.style.opacity = '0.5';
         elements.downloadBtn.style.pointerEvents = 'none';
+        elements.downloadBtn.disabled = true;
         state.downloadUrl = null;
     }
     
@@ -2215,8 +2259,21 @@ async function translateFile() {
     elements.translateFileBtn.disabled = true;
     elements.translateFileBtn.textContent = '翻译中...';
     
-    // 显示加载遮罩
+    // 禁用下载按钮
+    if (elements.downloadBtn) {
+        elements.downloadBtn.style.opacity = '0.5';
+        elements.downloadBtn.style.pointerEvents = 'none';
+        state.downloadUrl = null;
+    }
+    
+    // 显示加载遮罩 - 翻译阶段
     if (elements.translatingOverlay) {
+        elements.translatingText.textContent = '正在翻译文档...';
+        elements.translatingSubtext.textContent = 'AI 正在翻译，请稍候';
+        elements.translatingProgressBar.style.display = 'block';
+        elements.translatingProgressText.style.display = 'block';
+        elements.translatingProgressFill.style.width = '0%';
+        elements.translatingProgressText.textContent = '0 / ' + state.fileBlocks.length;
         elements.translatingOverlay.style.display = 'flex';
     }
     
@@ -2264,6 +2321,24 @@ async function translateFile() {
         
         showToast(`翻译批次 ${batchIdx + 1}/${batches.length}...`);
         
+        // 启动前端模拟进度动画
+        let simulatedProgress = completed;
+        const targetProgress = completed + batch.length;
+        const estimatedDuration = Math.max(20000, batch.length * 1120); // 模拟进度约为真实速度的0.2倍
+        const progressStep = batch.length / (estimatedDuration / 100); // 每100ms前进的块数
+        
+        const progressInterval = setInterval(() => {
+            simulatedProgress += progressStep;
+            if (simulatedProgress >= targetProgress) {
+                simulatedProgress = targetProgress - 0.5; // 留一点差距，等真实进度追上
+            }
+            if (elements.translatingOverlay) {
+                const progressPercent = Math.min(100, Math.round((simulatedProgress / total) * 100));
+                elements.translatingProgressFill.style.width = progressPercent + '%';
+                elements.translatingProgressText.textContent = Math.floor(simulatedProgress) + ' / ' + total;
+            }
+        }, 100);
+        
         try {
             console.log('[LLM链路] 发送请求到 /api/translate/batch...');
             const startTime = performance.now();
@@ -2274,6 +2349,9 @@ async function translateFile() {
             });
             const endTime = performance.now();
             const duration = (endTime - startTime) / 1000;
+            
+            // 清除模拟进度
+            clearInterval(progressInterval);
             
             console.log('[LLM链路] 响应状态:', response.status, '耗时:', duration.toFixed(2), '秒');
             const data = await response.json();
@@ -2324,6 +2402,14 @@ async function translateFile() {
                 
                 completed += actualCount;
                 console.log('[LLM链路] 批次完成，累计完成:', completed, '/', total);
+                
+                // 更新进度（实际进度）
+                if (elements.translatingOverlay) {
+                    const progressPercent = Math.min(100, Math.round((completed / total) * 100));
+                    elements.translatingProgressFill.style.width = progressPercent + '%';
+                    elements.translatingProgressText.textContent = completed + ' / ' + total;
+                }
+                
                 batchIdx++; // 处理下一个批次
                 
             } else {
@@ -2355,16 +2441,23 @@ async function translateFile() {
     console.log('[导出调试] 是否中国表:', state.isChinaSheet);
     console.log('[导出调试] 下载按钮元素:', elements.downloadBtn);
     
+    // 更新遮罩 - 导出阶段
+    if (elements.translatingOverlay) {
+        elements.translatingText.textContent = '正在生成文件...';
+        elements.translatingSubtext.textContent = '应用翻译并导出，请稍候';
+        elements.translatingProgressBar.style.display = 'none';
+        elements.translatingProgressText.style.display = 'none';
+    }
+    
     // 转换翻译结果为坐标映射格式（用于Excel/PPT）
     const mappedTranslations = {};
+    const isExcel = state.originalFilename && /\.(xlsx|xlsm|xls)$/i.test(state.originalFilename);
     for (const [key, value] of Object.entries(state.translations)) {
         const numKey = parseInt(key);
-        if (state.indexMapping && state.indexMapping[numKey]) {
-            // 使用坐标映射
+        if (isExcel && state.indexMapping && state.indexMapping[numKey]) {
             const coord = state.indexMapping[numKey];
             mappedTranslations[`${coord[0]},${coord[1]},${coord[2]}`] = value;
         } else {
-            // 使用原始索引
             mappedTranslations[key] = value;
         }
     }
@@ -2393,15 +2486,16 @@ async function translateFile() {
             if (!state.user) checkGuestLimit();
             
             // 启用下载按钮
-            if (elements.downloadBtn) {
-                console.log('[导出调试] 启用下载按钮, URL:', data.download_url);
-                state.downloadUrl = data.download_url; // 保存下载URL
-                elements.downloadBtn.style.opacity = '1';
-                elements.downloadBtn.style.pointerEvents = 'auto';
-                console.log('[导出调试] 下载按钮已启用');
-            } else {
-                console.error('[导出调试] 下载按钮元素不存在!');
-            }
+                if (elements.downloadBtn) {
+                    console.log('[导出调试] 启用下载按钮, URL:', data.download_url);
+                    state.downloadUrl = data.download_url; // 保存下载URL
+                    elements.downloadBtn.style.opacity = '1';
+                    elements.downloadBtn.style.pointerEvents = 'auto';
+                    elements.downloadBtn.disabled = false;
+                    console.log('[导出调试] 下载按钮已启用');
+                } else {
+                    console.error('[导出调试] 下载按钮元素不存在!');
+                }
         } else {
             console.error('[导出调试] 导出失败:', data.error);
             showToast('导出失败: ' + data.error);
@@ -2412,9 +2506,8 @@ async function translateFile() {
     }
     console.log('[导出调试] ========== 导出结束 ==========');
     
-    // 恢复按钮状态
-    elements.translateFileBtn.disabled = false;
-    elements.translateFileBtn.textContent = '翻译文件';
+    elements.translateFileBtn.textContent = '已翻译';
+    elements.translateFileBtn.disabled = true;
     
     // 隐藏加载遮罩
     if (elements.translatingOverlay) {
