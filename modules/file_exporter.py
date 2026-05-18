@@ -122,10 +122,13 @@ def export_word_simple(
         # 收集所有文本块及其位置
         text_blocks = []
         index = 0
+        seen_texts = set()
         
         # 段落
         for para in doc.paragraphs:
-            if para.text.strip():
+            text = para.text.strip()
+            if text and text not in seen_texts:
+                seen_texts.add(text)
                 text_blocks.append(("paragraph", para, index))
                 index += 1
         
@@ -133,7 +136,9 @@ def export_word_simple(
         for table in doc.tables:
             for row in table.rows:
                 for cell in row.cells:
-                    if cell.text.strip():
+                    text = cell.text.strip()
+                    if text and text not in seen_texts:
+                        seen_texts.add(text)
                         text_blocks.append(("cell", cell, index))
                         index += 1
         
@@ -141,6 +146,38 @@ def export_word_simple(
         print(f"[导出调试] 翻译字典包含 {len(translation_dict)} 个翻译")
         print(f"[导出调试] 文本块索引: {[idx for _, _, idx in text_blocks[:10]]}...")
         print(f"[导出调试] 翻译字典键: {list(translation_dict.keys())[:10]}...")
+        
+        def _copy_format(source_runs, target_run):
+            if source_runs:
+                src = source_runs[0]
+                if src.font.name:
+                    target_run.font.name = src.font.name
+                if src.font.size:
+                    target_run.font.size = src.font.size
+                target_run.bold = src.bold
+                target_run.italic = src.italic
+                target_run.underline = src.underline
+                if src.font.color and src.font.color.rgb:
+                    target_run.font.color.rgb = src.font.color.rgb
+        
+        def _dedup_translation(original_text, translated_text):
+            if not original_text or not translated_text:
+                return translated_text
+            orig_stripped = original_text.strip()
+            trans_stripped = translated_text.strip()
+            if trans_stripped == orig_stripped:
+                return orig_stripped
+            if trans_stripped.startswith(orig_stripped):
+                remaining = trans_stripped[len(orig_stripped):].strip()
+                if remaining:
+                    return remaining
+            return translated_text
+
+        def _text_already_contains(element, chinese_text):
+            existing = element.text
+            lines = [l.strip() for l in existing.split('\n') if l.strip()]
+            target = chinese_text.strip()
+            return any(target in line for line in lines)
         
         # 应用翻译
         applied_count = 0
@@ -150,24 +187,45 @@ def export_word_simple(
                 
                 if block_type == "paragraph":
                     para = block
+                    original_text = para.text.strip()
+                    translation = _dedup_translation(original_text, translation)
+
+                    if _text_already_contains(para, translation):
+                        print(f"[导出调试] 段落 {idx}: 译文已存在，跳过")
+                        continue
+
                     if mode == "bilingual":
                         para.add_run("\n")
                         run = para.add_run(translation)
+                        _copy_format(para.runs[:1], run)
                         run.font.color.rgb = RGBColor(0xFF, 0x00, 0x00)
                     else:
+                        runs_before = list(para.runs)
                         para.clear()
-                        para.add_run(translation)
+                        run = para.add_run(translation)
+                        _copy_format(runs_before, run)
                     applied_count += 1
                 
                 elif block_type == "cell":
                     cell = block
+                    cell_para = cell.paragraphs[0]
+                    original_text = cell_para.text.strip()
+                    translation = _dedup_translation(original_text, translation)
+
+                    if _text_already_contains(cell_para, translation):
+                        print(f"[导出调试] 单元格 {idx}: 译文已存在，跳过")
+                        continue
+
                     if mode == "bilingual":
-                        cell.paragraphs[0].add_run("\n")
-                        run = cell.paragraphs[0].add_run(translation)
+                        cell_para.add_run("\n")
+                        run = cell_para.add_run(translation)
+                        _copy_format(cell_para.runs[:1], run)
                         run.font.color.rgb = RGBColor(0xFF, 0x00, 0x00)
                     else:
-                        cell.paragraphs[0].clear()
-                        cell.paragraphs[0].add_run(translation)
+                        runs_before = list(cell_para.runs)
+                        cell_para.clear()
+                        run = cell_para.add_run(translation)
+                        _copy_format(runs_before, run)
                     applied_count += 1
             else:
                 print(f"[导出调试] 索引 {idx} 没有对应的翻译")
@@ -394,22 +452,15 @@ def export_pptx(
     try:
         prs = Presentation(original_path)
         
-        # 收集所有文本块及其位置
         text_blocks = []
         index = 0
         
         for slide_idx, slide in enumerate(prs.slides):
             for shape in slide.shapes:
-                # 处理普通文本框
-                if hasattr(shape, "text_frame"):
-                    text_frame = shape.text_frame
-                    for paragraph in text_frame.paragraphs:
-                        for run in paragraph.runs:
-                            if run.text.strip():
-                                text_blocks.append(("text_run", run, index))
-                                index += 1
+                if hasattr(shape, "text") and shape.text.strip():
+                    text_blocks.append(("shape", shape, index))
+                    index += 1
                 
-                # 处理表格
                 if shape.has_table:
                     table = shape.table
                     for row_idx, row in enumerate(table.rows):
@@ -418,29 +469,31 @@ def export_pptx(
                                 text_blocks.append(("table_cell", cell, index))
                                 index += 1
         
-        # 应用翻译
         for block_type, block, idx in text_blocks:
             if idx in translation_dict:
                 translation = translation_dict[idx]
                 
-                if block_type == "text_run":
-                    run = block
+                if block_type == "shape":
+                    shape = block
                     if mode == "bilingual":
-                        # 双语模式：原文 + 换行 + 译文
-                        original_text = run.text
-                        run.text = f"{original_text}\n{translation}"
-                        # 设置译文格式（红色）
-                        run.font.color.rgb = RGBColor(255, 0, 0)
+                        if hasattr(shape, "text_frame"):
+                            last_para = shape.text_frame.paragraphs[-1]
+                            new_para = shape.text_frame.add_paragraph()
+                            new_run = new_para.add_run()
+                            new_run.text = translation
+                            new_run.font.color.rgb = RGBColor(255, 0, 0)
                     else:
-                        # 仅译文模式：替换原文
-                        run.text = translation
+                        if hasattr(shape, "text_frame"):
+                            for para in shape.text_frame.paragraphs:
+                                for run in para.runs:
+                                    run.text = ""
+                            shape.text_frame.paragraphs[0].runs[0].text = translation
                 
                 elif block_type == "table_cell":
                     cell = block
                     if mode == "bilingual":
                         original_text = cell.text
                         cell.text = f"{original_text}\n{translation}"
-                        # 设置单元格文本颜色
                         for paragraph in cell.text_frame.paragraphs:
                             for run in paragraph.runs:
                                 run.font.color.rgb = RGBColor(255, 0, 0)

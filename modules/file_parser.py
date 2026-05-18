@@ -44,15 +44,18 @@ def parse_word_file(file_path: str) -> Tuple[List[Dict], Dict]:
     
     texts = []
     index = 0
+    seen_texts = set()
     
     # 解析段落
     for para_idx, para in enumerate(doc.paragraphs):
-        if para.text.strip():
+        text = para.text.strip()
+        if text and text not in seen_texts:
+            seen_texts.add(text)
             # 提取格式信息
             format_info = _extract_para_format(para)
             
             texts.append({
-                "text": para.text,
+                "text": text,
                 "type": "paragraph",
                 "style": para.style.name if para.style else "Normal",
                 "index": index,
@@ -65,9 +68,11 @@ def parse_word_file(file_path: str) -> Tuple[List[Dict], Dict]:
     for table_idx, table in enumerate(doc.tables):
         for row_idx, row in enumerate(table.rows):
             for cell_idx, cell in enumerate(row.cells):
-                if cell.text.strip():
+                text = cell.text.strip()
+                if text and text not in seen_texts:
+                    seen_texts.add(text)
                     texts.append({
-                        "text": cell.text,
+                        "text": text,
                         "type": "table_cell",
                         "table_index": table_idx,
                         "row": row_idx,
@@ -81,9 +86,11 @@ def parse_word_file(file_path: str) -> Tuple[List[Dict], Dict]:
     for section_idx, section in enumerate(doc.sections):
         if section.header:
             for para in section.header.paragraphs:
-                if para.text.strip():
+                text = para.text.strip()
+                if text and text not in seen_texts:
+                    seen_texts.add(text)
                     texts.append({
-                        "text": para.text,
+                        "text": text,
                         "type": "header",
                         "section_index": section_idx,
                         "index": index,
@@ -95,9 +102,11 @@ def parse_word_file(file_path: str) -> Tuple[List[Dict], Dict]:
     for section_idx, section in enumerate(doc.sections):
         if section.footer:
             for para in section.footer.paragraphs:
-                if para.text.strip():
+                text = para.text.strip()
+                if text and text not in seen_texts:
+                    seen_texts.add(text)
                     texts.append({
-                        "text": para.text,
+                        "text": text,
                         "type": "footer",
                         "section_index": section_idx,
                         "index": index,
@@ -558,69 +567,10 @@ def parse_csv_file(file_path: str) -> Tuple[List[Dict], Dict]:
 
 def parse_doc_file(file_path: str) -> Tuple[List[Dict], Dict]:
     """
-    解析旧版 .doc 文件
-    优先使用内置解析器，失败时尝试外部工具
-    
-    Args:
-        file_path: 文件路径
-        
-    Returns:
-        texts: 文本块列表
-        format_info: 格式信息
+    .doc 格式不支持，请转换为 .docx
     """
-    if not os.path.exists(file_path):
-        raise FileNotFoundError(f"文件不存在: {file_path}")
-    
-    # 首先尝试使用内置解析器
-    try:
-        from .doc_parser import parse_doc_file_simple
-        return parse_doc_file_simple(file_path)
-    except Exception as e:
-        print(f"内置解析器失败: {e}，尝试外部工具...")
-    
-    texts = []
-    
-    # 尝试使用 textract
-    try:
-        import textract
-        text = textract.process(file_path).decode('utf-8')
-        
-        # 按段落分割
-        for i, para in enumerate(text.split('\n')):
-            para = para.strip()
-            if para:
-                texts.append({
-                    "text": para,
-                    "type": "paragraph",
-                    "index": i,
-                    "format": {}
-                })
-        
-        return texts, {"method": "textract", "paragraph_count": len(texts)}
-    except ImportError:
-        pass
-    
-    # 尝试使用 antiword (Windows 上可能不可用)
-    try:
-        import subprocess
-        result = subprocess.run(['antiword', file_path], 
-                              capture_output=True, text=True)
-        if result.returncode == 0:
-            for i, para in enumerate(result.stdout.split('\n')):
-                para = para.strip()
-                if para:
-                    texts.append({
-                        "text": para,
-                        "type": "paragraph",
-                        "index": i,
-                        "format": {}
-                    })
-            return texts, {"method": "antiword", "paragraph_count": len(texts)}
-    except:
-        pass
-    
     raise ValueError(
-        "无法解析 .doc 文件。请将 .doc 文件另存为 .docx 格式后重试。"
+        "不支持 .doc 格式，请先将文件另存为 .docx 格式后再上传"
     )
 
 

@@ -1743,6 +1743,7 @@ English translation 2
 2. 不要合并多个块（如 [BLOCK_9-BLOCK_26] 是错误的）
 3. 必须翻译所有块，不能跳过任何块
 4. 保持 [BLOCK_X] 标记不变，只翻译标记后的内容
+5. **绝对不要**在翻译结果中附带英文原文，只输出纯中文翻译
 """
         
         logger.info("[后端] 开始调用 LLM 生成翻译...")
@@ -1794,6 +1795,20 @@ English translation 2
                 translation = re.sub(r'</think>.*?</think>', '', translation, flags=re.DOTALL).strip()
                 translation = translation.replace('译文：', '').replace('译文:', '').strip()
                 translation = translation.replace('---', '').strip()
+                
+                # 去重：LLM可能在单个block内重复输出相同翻译行
+                lines = translation.split('\n')
+                seen = set()
+                deduped = []
+                for line in lines:
+                    stripped = line.strip()
+                    if stripped and stripped not in seen:
+                        seen.add(stripped)
+                        deduped.append(stripped)
+                if deduped:
+                    translation = '\n'.join(deduped)
+                else:
+                    translation = lines[0].strip() if lines else translation
                 
                 logger.info(f"[后端] 块 {i}: 清理后长度={len(translation)}, 内容={translation[:50]}...")
                 
