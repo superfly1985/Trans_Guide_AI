@@ -1,7 +1,7 @@
 """
 TransGuide Web 应用
 提供翻译服务的 Web 界面
-后端版本: v1.3.2 - ChromaDB异步同步
+后端版本: v1.3.3 - 缓存更新 + 术语确认流程
 """
 
 import os
@@ -18,8 +18,9 @@ from flask import Flask, render_template, request, jsonify, send_file
 from werkzeug.utils import secure_filename
 
 # 版本信息
-APP_VERSION = 'v1.3.2'
-CSS_VERSION = 'v2.2'
+APP_VERSION = 'v1.3.3'
+CSS_VERSION = 'v2.4'
+FRONTEND_VERSION = 'v2.4'
 BUILD_TIME = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
 # 添加项目根目录到路径
@@ -203,7 +204,7 @@ def manager_required(f):
 @app.route('/')
 def index():
     """主页面"""
-    return render_template('index.html')
+    return render_template('index.html', app_version=APP_VERSION, css_version=CSS_VERSION, frontend_version=FRONTEND_VERSION)
 
 
 # ========== 版本检查接口 ==========
@@ -213,6 +214,7 @@ def get_version():
     return jsonify({
         'success': True,
         'backend': APP_VERSION,
+        'frontend': FRONTEND_VERSION,
         'css': CSS_VERSION,
         'build_time': BUILD_TIME
     })
@@ -1125,6 +1127,236 @@ def get_admin_stats_detail():
 # 历史文件导入 API
 # ========================================
 
+@app.route('/api/import/glossary', methods=['POST'])
+@login_required
+def upload_glossary():
+    """上传翻译表（xlsx/csv），返回预览数据（不直接入库）"""
+    try:
+        if 'file' not in request.files:
+            return jsonify({'success': False, 'error': '没有文件'})
+        
+        file = request.files['file']
+        if file.filename == '':
+            return jsonify({'success': False, 'error': '文件名为空'})
+        
+        ext = os.path.splitext(file.filename)[1].lower()
+        if ext not in ('.xlsx', '.xlsm', '.csv'):
+            return jsonify({'success': False, 'error': '翻译表仅支持 .xlsx / .csv 格式'})
+        
+        filename = secure_filename(file.filename)
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        filename = f"{timestamp}_{filename}"
+        filepath = UPLOAD_DIR / filename
+        file.save(str(filepath))
+        
+        logger.info(f"上传翻译表: {filepath}")
+        
+        try:
+            blocks, format_info = file_parser.parse_file(str(filepath))
+            logger.info(f"翻译表解析成功，共 {len(blocks)} 个文本块")
+        except ValueError as e:
+            if filepath.exists():
+                filepath.unlink()
+            return jsonify({'success': False, 'error': str(e)})
+        
+        if not blocks:
+            if filepath.exists():
+                filepath.unlink()
+            return jsonify({'success': False, 'error': '无法解析文件或文件为空'})
+        
+        raw_terms = _extract_glossary_from_blocks(blocks, filename)
+
+        existing = term_db.get_all_terms()
+
+        new_terms = []
+        conflict_terms = []
+        consistent_terms = []
+
+        for t in raw_terms:
+            eng = t['english']
+            chn = t['chinese']
+            key_lower = eng.lower().strip()
+
+            existing_target = None
+            for ek, ev in existing.items():
+                if ek.lower().strip() == key_lower:
+                    existing_target = ev
+                    break
+
+            if existing_target is None:
+                new_terms.append(t)
+            elif existing_target.strip() == chn.strip():
+                consistent_terms.append({
+                    **t,
+                    'existing_chinese': existing_target,
+                    'status': 'consistent'
+                })
+            else:
+                conflict_terms.append({
+                    **t,
+                    'existing_chinese': existing_target,
+                    'status': 'conflict'
+                })
+
+        logger.info(f"翻译表预览: {len(new_terms)}新增, {len(conflict_terms)}冲突, {len(consistent_terms)}一致")
+
+        return jsonify({
+            'success': True,
+            'filename': filename,
+            'filepath': str(filepath),
+            'total_detected': len(raw_terms),
+            'new_count': len(new_terms),
+            'conflict_count': len(conflict_terms),
+            'consistent_count': len(consistent_terms),
+            'terms': new_terms + conflict_terms + consistent_terms,
+        })
+        
+    except Exception as e:
+        logger.error(f"上传翻译表失败: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        return jsonify({'success': False, 'error': str(e)})
+
+
+@app.route('/api/import/glossary/process', methods=['POST'])
+@login_required
+def process_glossary():
+    """确认导入翻译表术语"""
+    try:
+        data = request.json
+        filepath = data.get('filepath', '')
+        source_filename = data.get('filename', '')
+        selected_terms = data.get('terms', [])
+
+        if not selected_terms:
+            return jsonify({'success': False, 'error': '没有选择任何术语'})
+
+        imported = 0
+        for t in selected_terms:
+            english = t.get('english', '').strip()
+            chinese = t.get('chinese', '').strip()
+            category = t.get('category', '翻译表导入')
+
+            if english and chinese:
+                success = term_db.add_term(
+                    english, chinese,
+                    category=category,
+                    notes=f"从翻译表 {source_filename} 导入"
+                )
+                if success:
+                    imported += 1
+
+        logger.info(f"翻译表确认导入完成: {imported} 个术语")
+
+        if filepath and os.path.exists(filepath):
+            try:
+                os.remove(filepath)
+            except Exception:
+                pass
+
+        return jsonify({
+            'success': True,
+            'imported_terms': imported,
+        })
+        
+    except Exception as e:
+        logger.error(f"翻译表确认导入失败: {e}")
+        return jsonify({'success': False, 'error': str(e)})
+
+
+def _extract_glossary_from_blocks(blocks, filename=''):
+    """从解析后的blocks中按行列对应关系提取术语对（适用于翻译表格式的xlsx/csv）"""
+    terms = []
+    
+    has_sheet_row_col = all(
+        'sheet' in b and 'row' in b and 'col' in b
+        for b in blocks
+    )
+    
+    if has_sheet_row_col:
+        from collections import defaultdict
+        rows_map = defaultdict(dict)
+        for b in blocks:
+            key = (b.get('sheet', ''), b.get('row', -1))
+            rows_map[key][b.get('col', -1)] = b['text'].strip()
+        
+        header_keywords = {'中文', '英语', '英文', 'english', 'chinese', '源语言', '目标语言', 
+                          'source', 'target', '原文', '译文', '原语', '译语', '德语', 'german',
+                          'local language', 'landessprache'}
+        
+        for (sheet, row_idx), cols in sorted(rows_map.items()):
+            sorted_cols = sorted(cols.keys())
+            if len(sorted_cols) < 2:
+                continue
+            
+            first_text = cols[sorted_cols[0]].strip()
+            second_text = cols[sorted_cols[1]].strip()
+            
+            if not first_text or not second_text:
+                continue
+            
+            combined_lower = (first_text + ' ' + second_text).lower().strip()
+            if combined_lower in header_keywords or first_text.lower() in header_keywords or second_text.lower() in header_keywords:
+                continue
+            
+            first_en = len(re.findall(r'[a-zA-Z]', first_text))
+            first_zh = len(re.findall(r'[\u4e00-\u9fff]', first_text))
+            second_en = len(re.findall(r'[a-zA-Z]', second_text))
+            second_zh = len(re.findall(r'[\u4e00-\u9fff]', second_text))
+            
+            if first_zh > 0 and second_en > 0 and second_en > second_zh:
+                english = second_text
+                chinese = first_text
+            elif first_en > 0 and second_zh > 0:
+                english = first_text
+                chinese = second_text
+            elif first_en > first_zh and second_zh > 0:
+                english = first_text
+                chinese = second_text
+            else:
+                continue
+            
+            if english and chinese and english != chinese:
+                terms.append({
+                    'english': english,
+                    'chinese': chinese,
+                    'category': '翻译表导入'
+                })
+    else:
+        for i in range(0, len(blocks) - 1, 2):
+            first = blocks[i]['text'].strip()
+            second = blocks[i + 1]['text'].strip() if i + 1 < len(blocks) else ''
+            
+            first_en = len(re.findall(r'[a-zA-Z]', first))
+            first_zh = len(re.findall(r'[\u4e00-\u9fff]', first))
+            second_en = len(re.findall(r'[a-zA-Z]', second))
+            second_zh = len(re.findall(r'[\u4e00-\u9fff]', second))
+            
+            if first_en > first_zh and second_zh > second_en:
+                english, chinese = first, second
+            elif first_zh > first_en and second_en > second_zh:
+                english, chinese = second, first
+            else:
+                continue
+            
+            if english and chinese and english != chinese:
+                terms.append({
+                    'english': english,
+                    'chinese': chinese,
+                    'category': '翻译表导入'
+                })
+    
+    seen = set()
+    unique = []
+    for t in terms:
+        key = t['english'].lower().strip()
+        if key not in seen:
+            seen.add(key)
+            unique.append(t)
+    
+    return unique
+
+
 @app.route('/api/import/upload', methods=['POST'])
 def upload_import_file():
     """上传历史翻译文件进行分析"""
@@ -1181,7 +1413,7 @@ def upload_import_file():
             print("[DEBUG] 使用 LLM 提取术语...", flush=True)
             logger.info("使用 LLM 提取术语...")
             # 合并所有文本内容
-            full_text = '\n'.join([block['text'] for block in blocks if len(block['text'].strip()) > 5])
+            full_text = '\n'.join([block['text'] for block in blocks if block['text'].strip()])
             print(f"[DEBUG] 准备发送给 LLM 的文本长度: {len(full_text)} 字符", flush=True)
             logger.info(f"准备发送给 LLM 的文本长度: {len(full_text)} 字符")
             
@@ -1206,15 +1438,35 @@ def upload_import_file():
             detection_message = "未检测到有效内容。请确保文件包含英文和中文对照内容。"
         elif len(llm_terms) == 0:
             detection_message = "未提取到术语，但检测到双语对。"
-        
+
+        existing = term_db.get_all_terms()
+        terms_with_status = []
+        for t in llm_terms:
+            eng = t.get('english', '').strip()
+            chn = t.get('chinese', '').strip()
+            existing_target = existing.get(eng, None)
+            if existing_target is None:
+                terms_with_status.append({**t, 'status': 'new'})
+            elif existing_target.strip() == chn.strip():
+                terms_with_status.append({**t, 'status': 'consistent', 'existing_chinese': existing_target})
+            else:
+                terms_with_status.append({**t, 'status': 'conflict', 'existing_chinese': existing_target})
+
+        import_count = sum(1 for t in terms_with_status if t['status'] == 'new')
+        conflict_count = sum(1 for t in terms_with_status if t['status'] == 'conflict')
+        consistent_count = sum(1 for t in terms_with_status if t['status'] == 'consistent')
+
         return jsonify({
             'success': True,
             'filename': filename,
             'filepath': str(filepath),
             'pairs': pairs[:20],
             'total_pairs': len(pairs),
-            'potential_terms': llm_terms[:30],
+            'potential_terms': terms_with_status[:30],
             'total_terms': len(llm_terms),
+            'new_count': import_count,
+            'conflict_count': conflict_count,
+            'consistent_count': consistent_count,
             'analysis': analysis,
             'message': detection_message,
             'llm_used': client is not None and client.is_available()

@@ -34,7 +34,12 @@ const state = {
     historyTotal: 0,
     historyData: [],
     // 翻译方向状态
-    translationDirection: localStorage.getItem('translationDirection') || 'en2zh'
+    translationDirection: localStorage.getItem('translationDirection') || 'en2zh',
+    // 翻译表导入状态
+    glossaryData: null,
+    glossarySelected: {},
+    // LLM术语提取选择状态
+    importTermSelected: {}
 };
 
 // 获取请求头（包含用户认证）
@@ -69,6 +74,25 @@ const elements = {
     importedTerms: document.getElementById('importedTerms'),
     importedSegments: document.getElementById('importedSegments'),
     analyzingOverlay: document.getElementById('analyzingOverlay'),
+    importSelectAll: document.getElementById('importSelectAll'),
+    importSelectNew: document.getElementById('importSelectNew'),
+    importDeselectAll: document.getElementById('importDeselectAll'),
+    importConfirmActions: document.getElementById('importConfirmActions'),
+    importSelectedCount: document.getElementById('importSelectedCount'),
+    glossaryUploadBtn: document.getElementById('glossaryUploadBtn'),
+    glossaryFileInput: document.getElementById('glossaryFileInput'),
+    glossaryPreview: document.getElementById('glossaryPreview'),
+    glossaryPreviewTitle: document.getElementById('glossaryPreviewTitle'),
+    glossaryTermList: document.getElementById('glossaryTermList'),
+    glossarySelectAll: document.getElementById('glossarySelectAll'),
+    glossarySelectNew: document.getElementById('glossarySelectNew'),
+    glossaryDeselectAll: document.getElementById('glossaryDeselectAll'),
+    glossaryConfirmBtn: document.getElementById('glossaryConfirmBtn'),
+    glossaryTotal: document.getElementById('glossaryTotal'),
+    glossaryNew: document.getElementById('glossaryNew'),
+    glossaryConflict: document.getElementById('glossaryConflict'),
+    glossaryConsistent: document.getElementById('glossaryConsistent'),
+    glossarySelectedCount: document.getElementById('glossarySelectedCount'),
     
     // 术语库
     termSearch: document.getElementById('termSearch'),
@@ -518,6 +542,28 @@ function bindImportEvents() {
 
     // 开始导入
     elements.startImportBtn?.addEventListener('click', processImport);
+
+    // LLM术语选择按钮
+    elements.importSelectAll?.addEventListener('click', () => importTermSelectAll(true));
+    elements.importDeselectAll?.addEventListener('click', () => importTermSelectAll(false));
+    elements.importSelectNew?.addEventListener('click', importTermSelectNewOnly);
+
+    // 上传翻译表
+    elements.glossaryUploadBtn?.addEventListener('click', () => {
+        elements.glossaryFileInput.click();
+    });
+
+    elements.glossaryFileInput?.addEventListener('change', (e) => {
+        const file = e.target.files[0];
+        if (file) {
+            uploadGlossary(file);
+        }
+    });
+
+    elements.glossarySelectAll?.addEventListener('click', () => glossarySelectAll(true));
+    elements.glossaryDeselectAll?.addEventListener('click', () => glossarySelectAll(false));
+    elements.glossarySelectNew?.addEventListener('click', glossarySelectNewOnly);
+    elements.glossaryConfirmBtn?.addEventListener('click', processGlossaryImport);
 }
 
 // 绑定文件翻译事件
@@ -708,6 +754,223 @@ async function loadStats() {
 // 导入历史文件功能
 // ========================================
 
+async function uploadGlossary(file) {
+    const formData = new FormData();
+    formData.append('file', file);
+
+    showToast('正在分析翻译表...');
+
+    try {
+        const response = await fetch('/api/import/glossary', {
+            method: 'POST',
+            headers: {
+                'X-User-ID': state.user.id
+            },
+            body: formData
+        });
+
+        const data = await response.json();
+
+        if (data.success) {
+            state.glossaryData = data;
+            state.glossarySelected = {};
+
+            const terms = data.terms || [];
+            terms.forEach((t, i) => {
+                const status = t.status || 'new';
+                if (status === 'new') {
+                    state.glossarySelected[i] = true;
+                } else if (status === 'conflict') {
+                    state.glossarySelected[i] = false;
+                } else {
+                    state.glossarySelected[i] = false;
+                }
+            });
+
+            renderGlossaryPreview(data);
+            showToast(`解析完成：${data.new_count}新增, ${data.conflict_count}冲突, ${data.consistent_count}已一致`);
+        } else {
+            showToast('翻译表分析失败: ' + data.error);
+        }
+    } catch (error) {
+        console.error('翻译表上传失败:', error);
+        showToast('上传失败，请检查网络连接');
+    }
+
+    elements.glossaryFileInput.value = '';
+}
+
+function renderGlossaryPreview(data) {
+    if (!elements.glossaryPreview) return;
+
+    elements.glossaryPreview.style.display = 'block';
+
+    const cleanName = (data.filename || '').replace(/^\d{8}_\d{6}_/, '');
+    elements.glossaryPreviewTitle.textContent = `翻译表预览 - ${cleanName}`;
+
+    elements.glossaryTotal.textContent = data.total_detected || 0;
+    elements.glossaryNew.textContent = data.new_count || 0;
+    elements.glossaryConflict.textContent = data.conflict_count || 0;
+    elements.glossaryConsistent.textContent = data.consistent_count || 0;
+
+    const terms = data.terms || [];
+
+    if (terms.length === 0) {
+        elements.glossaryTermList.innerHTML = '<div class="no-terms">未检测到有效术语</div>';
+        return;
+    }
+
+    elements.glossaryTermList.innerHTML = terms.map((t, i) => {
+        const status = t.status || 'new';
+        const isSelected = state.glossarySelected[i] || false;
+        const rowClass = isSelected ? 'glossary-term-row selected' : 'glossary-term-row';
+
+        let conflictHtml = '';
+        if (status === 'conflict' && t.existing_chinese) {
+            conflictHtml = `
+                <div class="glossary-conflict-info">
+                    <span>库中已有：</span>
+                    <span class="glossary-conflict-existing">${escapeHtml(t.existing_chinese)}</span>
+                    <span>→ 新译法：</span>
+                    <span class="glossary-conflict-new-label">${escapeHtml(t.chinese)}</span>
+                    <button class="glossary-conflict-keep-old ${isSelected ? '' : 'active'}" 
+                            data-index="${i}" onclick="event.stopPropagation(); toggleConflictChoice(${i})">
+                        ${isSelected ? '使用新译法' : '保留旧译法'}
+                    </button>
+                </div>`;
+        }
+
+        const statusLabel = {
+            'new': '<span class="glossary-term-status new">新增</span>',
+            'conflict': '<span class="glossary-term-status conflict">冲突</span>',
+            'consistent': '<span class="glossary-term-status consistent">已一致</span>'
+        };
+
+        return `
+            <div class="${rowClass}" data-index="${i}" onclick="toggleGlossaryTerm(${i})">
+                <div class="glossary-term-check"></div>
+                <div class="glossary-term-body">
+                    <div class="glossary-term-pair">
+                        <span class="glossary-term-en">${escapeHtml(t.english)}</span>
+                        <span class="glossary-term-arrow">→</span>
+                        <span class="glossary-term-zh">${escapeHtml(t.chinese)}</span>
+                    </div>
+                    ${conflictHtml}
+                </div>
+                ${statusLabel[status] || ''}
+            </div>`;
+    }).join('');
+
+    updateGlossarySelectedCount();
+}
+
+function toggleGlossaryTerm(index) {
+    state.glossarySelected[index] = !state.glossarySelected[index];
+    updateGlossaryRowUI(index);
+    updateGlossarySelectedCount();
+}
+
+function updateGlossaryRowUI(index) {
+    const row = elements.glossaryTermList?.querySelector(`[data-index="${index}"]`);
+    if (!row) return;
+
+    const isSelected = state.glossarySelected[index];
+    row.classList.toggle('selected', isSelected);
+
+    const conflictBtn = row.querySelector('.glossary-conflict-keep-old');
+    if (conflictBtn) {
+        conflictBtn.classList.toggle('active', !isSelected);
+        conflictBtn.textContent = isSelected ? '使用新译法' : '保留旧译法';
+    }
+}
+
+function toggleConflictChoice(index) {
+    toggleGlossaryTerm(index);
+}
+
+function glossarySelectAll(select) {
+    const terms = state.glossaryData?.terms || [];
+    terms.forEach((t, i) => {
+        state.glossarySelected[i] = select;
+    });
+    refreshGlossaryRows();
+    updateGlossarySelectedCount();
+}
+
+function glossarySelectNewOnly() {
+    const terms = state.glossaryData?.terms || [];
+    terms.forEach((t, i) => {
+        const status = t.status || 'new';
+        state.glossarySelected[i] = (status === 'new');
+    });
+    refreshGlossaryRows();
+    updateGlossarySelectedCount();
+}
+
+function refreshGlossaryRows() {
+    const rows = elements.glossaryTermList?.querySelectorAll('.glossary-term-row');
+    if (!rows) return;
+    rows.forEach(row => {
+        const index = parseInt(row.dataset.index);
+        updateGlossaryRowUI(index);
+    });
+}
+
+function updateGlossarySelectedCount() {
+    const count = Object.values(state.glossarySelected).filter(Boolean).length;
+    if (elements.glossarySelectedCount) {
+        elements.glossarySelectedCount.textContent = `已选 ${count} 项`;
+    }
+}
+
+async function processGlossaryImport() {
+    const terms = state.glossaryData?.terms || [];
+    const selectedTerms = terms.filter((_, i) => state.glossarySelected[i]);
+
+    if (selectedTerms.length === 0) {
+        showToast('请至少选择一个术语');
+        return;
+    }
+
+    elements.glossaryConfirmBtn.disabled = true;
+    elements.glossaryConfirmBtn.textContent = '导入中...';
+
+    try {
+        const response = await fetch('/api/import/glossary/process', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-User-ID': state.user.id
+            },
+            body: JSON.stringify({
+                filepath: state.glossaryData.filepath,
+                filename: state.glossaryData.filename,
+                terms: selectedTerms
+            })
+        });
+
+        const data = await response.json();
+
+        if (data.success) {
+            showToast(`导入完成！共导入 ${data.imported_terms} 个术语`);
+            if (elements.glossaryPreview) {
+                elements.glossaryPreview.style.display = 'none';
+            }
+            state.glossaryData = null;
+            state.glossarySelected = {};
+            loadStats();
+        } else {
+            showToast('导入失败: ' + data.error);
+        }
+    } catch (error) {
+        console.error('导入失败:', error);
+        showToast('导入失败，请检查网络连接');
+    } finally {
+        elements.glossaryConfirmBtn.disabled = false;
+        elements.glossaryConfirmBtn.textContent = '确认导入所选术语';
+    }
+}
+
 async function uploadImportFile(file) {
     const formData = new FormData();
     formData.append('file', file);
@@ -732,6 +995,20 @@ async function uploadImportFile(file) {
             state.importFile = data.filename;
             state.importData = data;
             
+            // 初始化选择状态：新增默认勾选，冲突和一致不勾选
+            state.importTermSelected = {};
+            const terms = data.potential_terms || [];
+            terms.forEach((t, i) => {
+                const status = t.status || '';
+                if (status === 'new') {
+                    state.importTermSelected[i] = true;
+                } else if (status === 'conflict') {
+                    state.importTermSelected[i] = false;
+                } else {
+                    state.importTermSelected[i] = false;
+                }
+            });
+
             // 显示预览
             renderImportPreview(data);
             
@@ -756,42 +1033,69 @@ async function uploadImportFile(file) {
 }
 
 function renderImportPreview(data) {
-    // 显示预览区域
     elements.importPreview.style.display = 'block';
     elements.importResult.style.display = 'none';
     
-    // 文件名
     elements.importFilename.textContent = data.filename.replace(/^\d{8}_\d{6}_/, '');
     
-    // 更新术语数量显示
     elements.detectedTerms.textContent = data.total_terms;
-    
-    // 渲染术语列表（优先显示）
+    if (data.new_count !== undefined) {
+        elements.detectedTerms.textContent += ` (${data.new_count}新增, ${data.conflict_count || 0}冲突)`;
+    }
+
     const termsList = document.getElementById('termsPreviewList');
     const terms = data.potential_terms || [];
-    
+
     if (terms.length > 0) {
-        // 显示所有术语，按分类分组
         const termsByCategory = {};
-        terms.forEach(term => {
+        terms.forEach((term, idx) => {
             const cat = term.category || '未分类';
             if (!termsByCategory[cat]) termsByCategory[cat] = [];
-            termsByCategory[cat].push(term);
+            termsByCategory[cat].push({ ...term, globalIndex: idx });
         });
-        
+
         let termsHtml = '';
         for (const [category, catTerms] of Object.entries(termsByCategory)) {
             termsHtml += `
                 <div class="terms-category">
                     <span class="category-label">${escapeHtml(category)}</span>
                     <div class="terms-items">
-                        ${catTerms.map(term => `
-                            <div class="extract-term-item">
+                        ${catTerms.map(term => {
+                            const i = term.globalIndex;
+                            const status = term.status || '';
+                            const isSelected = state.importTermSelected[i] || false;
+                            
+                            let conflictHtml = '';
+                            if (status === 'conflict' && term.existing_chinese) {
+                                conflictHtml = `
+                                    <div class="import-term-conflict">
+                                        <span>库中已有：</span>
+                                        <span class="conflict-old">${escapeHtml(term.existing_chinese)}</span>
+                                        <span>→ 新：</span>
+                                        <span style="color:#22c55e">${escapeHtml(term.chinese)}</span>
+                                        <button class="glossary-conflict-keep-old ${isSelected ? '' : 'active'}" 
+                                                data-import-idx="${i}" onclick="event.stopPropagation(); toggleImportConflict(${i})">
+                                            ${isSelected ? '使用新译法' : '保留旧译法'}
+                                        </button>
+                                    </div>`;
+                            }
+
+                            const statusBadge = status === 'new' ? '<span class="glossary-term-status new">新增</span>' :
+                                status === 'conflict' ? '<span class="glossary-term-status conflict">冲突</span>' :
+                                '<span class="glossary-term-status consistent">已一致</span>';
+
+                            return `
+                            <div class="extract-term-item ${isSelected ? 'selected' : ''}" 
+                                 data-import-idx="${i}" 
+                                 onclick="toggleImportTerm(${i})">
+                                <div class="glossary-term-check"></div>
                                 <span class="extract-term-en">${escapeHtml(term.english)}</span>
                                 <span class="extract-term-arrow">→</span>
                                 <span class="extract-term-zh">${escapeHtml(term.chinese)}</span>
-                            </div>
-                        `).join('')}
+                                ${statusBadge}
+                                ${conflictHtml}
+                            </div>`;
+                        }).join('')}
                     </div>
                 </div>
             `;
@@ -800,15 +1104,18 @@ function renderImportPreview(data) {
     } else {
         termsList.innerHTML = '<div class="no-terms">未提取到术语</div>';
     }
+
+    if (elements.importConfirmActions) {
+        elements.importConfirmActions.style.display = terms.length > 0 ? 'flex' : 'none';
+    }
+    updateImportSelectedCount();
     
-    // 渲染双语对（拆分成句子，折叠显示）
     const pairsList = document.getElementById('pairsPreviewList');
     const pairsSummary = document.querySelector('.pairs-summary span:first-child');
     if (pairsSummary) {
         pairsSummary.textContent = `双语对照句段 (${data.total_pairs} 对)`;
     }
     
-    // 将段落拆分成句子
     const sentences = [];
     (data.pairs || []).forEach((pair, idx) => {
         const sourceSentences = splitIntoSentences(pair.source);
@@ -855,8 +1162,60 @@ function renderImportPreview(data) {
 // 将文本拆分成句子
 function splitIntoSentences(text) {
     if (!text) return [];
-    // 按中英文句号、问号、感叹号拆分
     return text.split(/([。\.\?\!？！]+)/).filter(s => s.trim().length > 0);
+}
+
+function toggleImportTerm(index) {
+    state.importTermSelected[index] = !state.importTermSelected[index];
+    updateImportRowUI(index);
+    updateImportSelectedCount();
+}
+
+function updateImportRowUI(index) {
+    const row = document.querySelector(`[data-import-idx="${index}"]`);
+    if (!row) return;
+    const isSelected = state.importTermSelected[index];
+    row.classList.toggle('selected', isSelected);
+    const conflictBtn = row.querySelector('.glossary-conflict-keep-old');
+    if (conflictBtn) {
+        conflictBtn.classList.toggle('active', !isSelected);
+        conflictBtn.textContent = isSelected ? '使用新译法' : '保留旧译法';
+    }
+}
+
+function toggleImportConflict(index) {
+    toggleImportTerm(index);
+}
+
+function importTermSelectAll(select) {
+    const terms = state.importData?.potential_terms || [];
+    terms.forEach((t, i) => { state.importTermSelected[i] = select; });
+    refreshImportRows();
+    updateImportSelectedCount();
+}
+
+function importTermSelectNewOnly() {
+    const terms = state.importData?.potential_terms || [];
+    terms.forEach((t, i) => {
+        state.importTermSelected[i] = (t.status === 'new');
+    });
+    refreshImportRows();
+    updateImportSelectedCount();
+}
+
+function refreshImportRows() {
+    const rows = document.querySelectorAll('[data-import-idx]');
+    rows.forEach(row => {
+        const index = parseInt(row.dataset.importIdx);
+        updateImportRowUI(index);
+    });
+}
+
+function updateImportSelectedCount() {
+    const count = Object.values(state.importTermSelected).filter(Boolean).length;
+    if (elements.importSelectedCount) {
+        elements.importSelectedCount.textContent = `已选 ${count} 项`;
+    }
 }
 
 async function processImport() {
@@ -864,7 +1223,16 @@ async function processImport() {
         showToast('请先上传文件');
         return;
     }
-    
+
+    const selectedTerms = (state.importData.potential_terms || []).filter(
+        (_, i) => state.importTermSelected[i]
+    );
+
+    if (state.importData.potential_terms && state.importData.potential_terms.length > 0 && selectedTerms.length === 0) {
+        showToast('请至少选择一个术语，或点击取消选择不使用术语');
+        return;
+    }
+
     elements.startImportBtn.disabled = true;
     elements.startImportBtn.textContent = '导入中...';
     
@@ -881,7 +1249,7 @@ async function processImport() {
                 filename: state.importFile,
                 filepath: state.importData.filepath,
                 pairs: state.importData.pairs,
-                terms: state.importData.potential_terms
+                terms: selectedTerms
             })
         });
         
