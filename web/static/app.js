@@ -74,6 +74,7 @@ const elements = {
     importedTerms: document.getElementById('importedTerms'),
     importedSegments: document.getElementById('importedSegments'),
     analyzingOverlay: document.getElementById('analyzingOverlay'),
+    maxTermsSelect: document.getElementById('maxTermsSelect'),
     importSelectAll: document.getElementById('importSelectAll'),
     importSelectNew: document.getElementById('importSelectNew'),
     importDeselectAll: document.getElementById('importDeselectAll'),
@@ -164,7 +165,9 @@ async function init() {
     // 加载版本信息
     await loadVersionInfo();
 
-    // 如果已登录，加载统计数据
+    const savedView = sessionStorage.getItem('activeView');
+    switchView(savedView || state.currentView);
+
     if (state.user) {
         loadStats();
     }
@@ -495,6 +498,14 @@ function updateTranslationPlaceholder() {
 function bindImportEvents() {
     if (!elements.importUploadArea) return;
 
+    if (elements.maxTermsSelect) {
+        const saved = localStorage.getItem('maxTerms');
+        if (saved) elements.maxTermsSelect.value = saved;
+        elements.maxTermsSelect.addEventListener('change', () => {
+            localStorage.setItem('maxTerms', elements.maxTermsSelect.value);
+        });
+    }
+
     // 点击上传
     elements.importUploadArea.addEventListener('click', (e) => {
         if (e.target.tagName !== 'BUTTON') {
@@ -648,7 +659,8 @@ function debounce(func, wait) {
 // ========================================
 
 function switchView(viewName) {
-    // 游客只能访问文本翻译、文件翻译
+    sessionStorage.setItem('activeView', viewName);
+
     if (!state.user && !['translate', 'files'].includes(viewName)) {
         showToast('请先登录以访问此功能');
         return;
@@ -953,12 +965,8 @@ async function processGlossaryImport() {
 
         if (data.success) {
             showToast(`导入完成！共导入 ${data.imported_terms} 个术语`);
-            if (elements.glossaryPreview) {
-                elements.glossaryPreview.style.display = 'none';
-            }
-            state.glossaryData = null;
-            state.glossarySelected = {};
             loadStats();
+            setTimeout(resetImportView, 1500);
         } else {
             showToast('导入失败: ' + data.error);
         }
@@ -974,8 +982,9 @@ async function processGlossaryImport() {
 async function uploadImportFile(file) {
     const formData = new FormData();
     formData.append('file', file);
+    const maxTerms = elements.maxTermsSelect?.value || '35';
+    formData.append('max_terms', maxTerms);
     
-    // 显示加载遮罩层
     if (elements.analyzingOverlay) {
         elements.analyzingOverlay.style.display = 'flex';
     }
@@ -1256,21 +1265,9 @@ async function processImport() {
         const data = await response.json();
         
         if (data.success) {
-            // 显示结果
-            elements.importResult.style.display = 'block';
-            elements.importedTerms.textContent = data.imported_terms;
-            elements.importedSegments.textContent = data.imported_segments;
-            
-            // 如果有后台同步任务，显示状态并启动轮询
-            if (data.chroma_sync_pending > 0) {
-                showToast(`导入完成！${data.chroma_sync_pending} 条句段向量编码中...`);
-                startSyncPolling();
-            } else {
-                showToast('导入完成！');
-            }
-            
-            // 刷新统计数据
+            showToast(`导入完成！共导入 ${data.imported_terms} 个术语，${data.imported_segments} 条句段`);
             loadStats();
+            setTimeout(resetImportView, 1500);
         } else {
             showToast('导入失败: ' + data.error);
         }
@@ -1279,8 +1276,20 @@ async function processImport() {
         showToast('导入失败，请重试');
     } finally {
         elements.startImportBtn.disabled = false;
-        elements.startImportBtn.textContent = '开始导入';
+        elements.startImportBtn.textContent = '确认导入所选术语';
     }
+}
+
+function resetImportView() {
+    if (elements.importPreview) elements.importPreview.style.display = 'none';
+    if (elements.importResult) elements.importResult.style.display = 'none';
+    if (elements.importConfirmActions) elements.importConfirmActions.style.display = 'none';
+    if (elements.glossaryPreview) elements.glossaryPreview.style.display = 'none';
+    state.importData = null;
+    state.importFile = null;
+    state.importTermSelected = {};
+    state.glossaryData = null;
+    state.glossarySelected = {};
 }
 
 // ========================================
