@@ -2558,6 +2558,7 @@ function bindPaginationEvents() {
 
 // 创建批次分组
 function createBatches(blocks, maxSize) {
+    const MAX_BLOCKS_PER_BATCH = 20;
     const batches = [];
     let currentBatch = [];
     let currentSize = 0;
@@ -2565,8 +2566,7 @@ function createBatches(blocks, maxSize) {
     for (const block of blocks) {
         const blockSize = block.text.length;
         
-        // 如果当前批次加上这个块会超限，先保存当前批次
-        if (currentSize + blockSize > maxSize && currentBatch.length > 0) {
+        if ((currentSize + blockSize > maxSize || currentBatch.length >= MAX_BLOCKS_PER_BATCH) && currentBatch.length > 0) {
             batches.push(currentBatch);
             currentBatch = [];
             currentSize = 0;
