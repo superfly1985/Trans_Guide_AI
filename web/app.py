@@ -1837,7 +1837,7 @@ def translate_text():
                 tm_examples=tm_examples_str
             )
         
-        response = client.generate(prompt)
+        response = client.generate(prompt, max_tokens=8192)
         
         # 清理响应
         translation = re.sub(r'</think>.*?</think>', '', response, flags=re.DOTALL).strip()
@@ -2004,7 +2004,7 @@ English translation 2
         logger.info(f"[后端] 提示词长度: {len(prompt)} 字符")
         logger.info(f"[后端] 提示词预览: {prompt[:300]}...")
         
-        response = client.generate(prompt)
+        response = client.generate(prompt, max_tokens=8192)
         logger.info(f"[后端] LLM 响应长度: {len(response)} 字符")
         logger.info(f"[后端] LLM 完整响应:\n{response}")
         
