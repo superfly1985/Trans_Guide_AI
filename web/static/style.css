@@ -36,6 +36,7 @@ body::before { content: ''; display: none; }
     --accent-primary: #3b82f6;
     --accent-secondary: #60a5fa;
     --accent-glow: rgba(59, 130, 246, 0.15);
+    --accent-gradient: linear-gradient(135deg, #3b82f6 0%, #8b5cf6 100%);
 
     /* 功能色 - 低饱和 */
     --success: #22c55e;
@@ -1181,11 +1182,34 @@ html, body {
     border: 1px solid var(--border-subtle);
     font-size: 13px;
     transition: all var(--transition-fast);
+    flex-wrap: wrap;
 }
 
 .extract-term-item:hover {
     border-color: var(--border-default);
     background: var(--bg-hover);
+}
+
+.extract-term-item.selected {
+    border-color: var(--accent-primary);
+    background: rgba(59, 130, 246, 0.08);
+}
+
+.extract-term-item.selected .glossary-term-check {
+    background: var(--accent-primary);
+    border-color: var(--accent-primary);
+}
+
+.extract-term-item.selected .glossary-term-check::after {
+    display: block;
+}
+
+.import-confirm-actions {
+    padding: var(--space-4) var(--space-5);
+    border-top: 1px solid var(--border-subtle);
+    background: var(--bg-surface);
+    justify-content: flex-end;
+    gap: var(--space-3);
 }
 
 .extract-term-en {
@@ -1210,6 +1234,21 @@ html, body {
     color: var(--text-tertiary);
     padding: 40px;
     font-style: italic;
+}
+
+.import-term-conflict {
+    font-size: 11px;
+    color: var(--text-tertiary);
+    margin-top: 4px;
+    padding: 3px 8px;
+    background: rgba(239, 68, 68, 0.06);
+    border-radius: var(--radius-sm);
+    border-left: 2px solid var(--error);
+    width: 100%;
+}
+
+.import-term-conflict .conflict-old {
+    text-decoration: line-through;
 }
 
 /* 双语对预览区域（折叠） */
@@ -1309,6 +1348,205 @@ html, body {
     color: var(--text-tertiary);
     padding: 30px;
     font-style: italic;
+}
+
+/* 翻译表预览面板 */
+.glossary-preview {
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-lg);
+    background: var(--bg-elevated);
+    overflow: hidden;
+    box-shadow: var(--shadow-md);
+    margin-bottom: var(--space-6);
+}
+
+.glossary-term-list {
+    max-height: 420px;
+    overflow-y: auto;
+    padding: var(--space-3) var(--space-5);
+}
+
+.glossary-term-row {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    padding: 10px var(--space-3);
+    margin-bottom: var(--space-1);
+    border-radius: var(--radius-sm);
+    border: 1px solid transparent;
+    transition: all var(--transition-fast);
+    cursor: default;
+}
+
+.glossary-term-row:hover {
+    border-color: var(--border-subtle);
+    background: var(--bg-surface);
+}
+
+.glossary-term-row.selected {
+    border-color: var(--accent-primary);
+    background: rgba(59, 130, 246, 0.08);
+}
+
+.glossary-term-check {
+    flex-shrink: 0;
+    width: 18px;
+    height: 18px;
+    border-radius: var(--radius-sm);
+    border: 2px solid var(--border-hover);
+    background: transparent;
+    cursor: pointer;
+    transition: all var(--transition-fast);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.glossary-term-row.selected .glossary-term-check {
+    background: var(--accent-primary);
+    border-color: var(--accent-primary);
+}
+
+.glossary-term-check::after {
+    content: '';
+    display: none;
+    width: 5px;
+    height: 9px;
+    border: solid white;
+    border-width: 0 2px 2px 0;
+    transform: rotate(45deg);
+    margin-top: -2px;
+}
+
+.glossary-term-row.selected .glossary-term-check::after {
+    display: block;
+}
+
+.glossary-term-body {
+    flex: 1;
+    min-width: 0;
+}
+
+.glossary-term-pair {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    font-size: 13px;
+    line-height: 1.4;
+}
+
+.glossary-term-en {
+    color: var(--text-body);
+    font-weight: 500;
+}
+
+.glossary-term-arrow {
+    color: var(--text-tertiary);
+    font-size: 11px;
+    flex-shrink: 0;
+}
+
+.glossary-term-zh {
+    color: var(--accent-secondary);
+    font-weight: 500;
+}
+
+.glossary-term-status {
+    flex-shrink: 0;
+    font-size: 11px;
+    font-weight: 700;
+    padding: 3px 10px;
+    border-radius: var(--radius-full);
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+}
+
+.glossary-term-status.new {
+    background: rgba(34, 197, 94, 0.12);
+    color: #22c55e;
+}
+
+.glossary-term-status.conflict {
+    background: rgba(239, 68, 68, 0.12);
+    color: #ef4444;
+}
+
+.glossary-term-status.consistent {
+    background: rgba(113, 113, 122, 0.12);
+    color: #71717a;
+}
+
+.glossary-conflict-info {
+    margin-top: 6px;
+    padding: 8px var(--space-3);
+    background: rgba(239, 68, 68, 0.06);
+    border-radius: var(--radius-sm);
+    border-left: 3px solid var(--error);
+    font-size: 12px;
+    color: var(--text-secondary);
+    line-height: 1.5;
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    flex-wrap: wrap;
+}
+
+.glossary-conflict-existing {
+    color: var(--text-tertiary);
+    text-decoration: line-through;
+}
+
+.glossary-conflict-new-label {
+    color: #22c55e;
+}
+
+.glossary-conflict-keep-old {
+    font-size: 11px;
+    padding: 2px 8px;
+    border: 1px solid var(--border-hover);
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--text-tertiary);
+    cursor: pointer;
+    transition: all var(--transition-fast);
+    white-space: nowrap;
+}
+
+.glossary-conflict-keep-old:hover {
+    border-color: var(--accent-primary);
+    color: var(--accent-primary);
+    background: rgba(59, 130, 246, 0.08);
+}
+
+.glossary-conflict-keep-old.active {
+    border-color: var(--accent-primary);
+    background: var(--accent-primary);
+    color: white;
+}
+
+.glossary-confirm-actions {
+    padding: var(--space-4) var(--space-5);
+    border-top: 1px solid var(--border-subtle);
+    background: var(--bg-surface);
+    justify-content: flex-end;
+}
+
+.glossary-selected-count {
+    font-size: 13px;
+    color: var(--text-secondary);
+    margin-right: auto;
+}
+
+.stat-card.new {
+    border-color: rgba(34, 197, 94, 0.2);
+}
+
+.stat-card.conflict {
+    border-color: rgba(239, 68, 68, 0.2);
+}
+
+.stat-card.consistent {
+    border-color: rgba(113, 113, 122, 0.2);
 }
 
 /* 导入结果 */
