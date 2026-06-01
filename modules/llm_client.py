@@ -167,26 +167,22 @@ class APILLMClient(BaseLLMClient):
             raise ImportError("请安装 openai: pip install openai")
     
     def generate(self, prompt: str, **kwargs) -> str:
-        """
-        生成文本 - 完全按照MiniMax官方示例
-        
-        Args:
-            prompt: 提示词
-            
-        Returns:
-            生成的文本
-        """
         if not self._client:
             raise RuntimeError("API客户端未初始化")
-        
+
+        system_msg = kwargs.pop("system", "You are a helpful assistant.")
+        max_tokens_val = kwargs.pop("max_tokens", self.max_tokens)
+        temperature_val = kwargs.pop("temperature", self.temperature)
+
         try:
             response = self._client.chat.completions.create(
                 model=self.model_name,
                 messages=[
-                    {"role": "system", "content": "You are a helpful assistant."},
+                    {"role": "system", "content": system_msg},
                     {"role": "user", "content": prompt}
                 ],
-                max_tokens=kwargs.get("max_tokens", self.max_tokens)
+                max_tokens=max_tokens_val,
+                temperature=temperature_val
             )
             
             return response.choices[0].message.content.strip()

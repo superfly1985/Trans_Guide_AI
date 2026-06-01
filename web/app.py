@@ -1417,9 +1417,11 @@ def upload_import_file():
             print(f"[DEBUG] 准备发送给 LLM 的文本长度: {len(full_text)} 字符", flush=True)
             logger.info(f"准备发送给 LLM 的文本长度: {len(full_text)} 字符")
             
+            max_terms = int(request.form.get('max_terms', 35))
+
             try:
-                print(f"[DEBUG] 调用 extract_terms_with_llm...", flush=True)
-                llm_terms = extract_terms_with_llm(full_text, client, max_terms=15)
+                print(f"[DEBUG] 调用 extract_terms_with_llm, max_terms={max_terms}...", flush=True)
+                llm_terms = extract_terms_with_llm(full_text, client, max_terms=max_terms)
                 print(f"[DEBUG] LLM 提取到 {len(llm_terms)} 个术语", flush=True)
                 logger.info(f"LLM 提取到 {len(llm_terms)} 个术语")
             except Exception as e:

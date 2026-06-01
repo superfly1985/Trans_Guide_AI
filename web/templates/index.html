@@ -165,6 +165,12 @@
                         <p class="page-subtitle">上传历史双语文件，自动提取术语和翻译记忆</p>
                     </div>
                     <div class="view-actions">
+                        <span style="font-size: 13px; color: var(--text-secondary);">提炼数：</span>
+                        <select class="form-select" id="maxTermsSelect" style="width: auto; font-size: 13px;">
+                            <option value="15">15 个</option>
+                            <option value="35" selected>35 个</option>
+                            <option value="50">50 个</option>
+                        </select>
                         <button class="btn btn-primary" id="glossaryUploadBtn">
                             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                                 <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
