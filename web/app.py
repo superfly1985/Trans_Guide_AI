@@ -1473,10 +1473,25 @@ def upload_import_file():
             'message': detection_message,
             'llm_used': client is not None and client.is_available()
         })
-        
+
     except Exception as e:
         logger.error(f"上传历史文件失败: {e}")
+        # 异常时清理上传的临时文件
+        try:
+            if 'filepath' in locals() and filepath and os.path.exists(str(filepath)):
+                os.remove(str(filepath))
+                logger.info(f"清理异常上传文件: {filepath}")
+        except Exception:
+            pass
         return jsonify({'success': False, 'error': str(e)})
+    finally:
+        # 正常路径：分析完成后清理上传的源文件（避免磁盘堆积）
+        try:
+            if 'filepath' in locals() and filepath and os.path.exists(str(filepath)):
+                os.remove(str(filepath))
+                logger.info(f"清理上传源文件: {filepath}")
+        except Exception as cleanup_err:
+            logger.warning(f"清理上传文件失败: {cleanup_err}")
 
 
 @app.route('/api/import/process', methods=['POST'])
@@ -2318,6 +2333,14 @@ def translate_file():
                     user_db.complete_translation_record(record_id, file_size, summary=chinese_summary)
                 logger.info(f"[导出调试] 翻译完成，文件大小: {file_size} 字节")
 
+                # 清理 uploads 中的源文件（翻译完成，避免堆积）
+                try:
+                    if filepath.exists():
+                        filepath.unlink()
+                        logger.info(f"[清理] 已删除上传源文件: {filepath}")
+                except Exception as cleanup_err:
+                    logger.warning(f"[清理] 删除源文件失败: {cleanup_err}")
+
                 return jsonify({
                     'success': True,
                     'download_url': f'/api/download/{output_filename}',
@@ -2326,6 +2349,12 @@ def translate_file():
             else:
                 if record_id:
                     user_db.complete_translation_record(record_id, 0, '导出失败')
+                # 导出失败时也清理源文件
+                try:
+                    if filepath.exists():
+                        filepath.unlink()
+                except Exception:
+                    pass
                 return jsonify({'success': False, 'error': '导出失败'})
 
         except Exception as export_error:
