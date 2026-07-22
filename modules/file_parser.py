@@ -190,11 +190,14 @@ def parse_excel_file(file_path: str) -> Tuple[List[Dict], Dict]:
         raise ValueError(f"不支持的Excel格式: {ext}")
 
 
+MAX_STANDARD_EXCEL_CELLS = 500_000
+
+
 def _parse_excel_openpyxl(file_path: str) -> Tuple[List[Dict], Dict]:
     """使用 openpyxl 解析 .xlsx 和 .xlsm 文件"""
     try:
         from openpyxl import load_workbook
-        from .special_parsers import parse_china_sheet
+        from .special_parsers import find_china_sheet_name, parse_china_sheet
     except ImportError:
         raise ImportError("请安装 openpyxl: pip install openpyxl")
     
@@ -203,22 +206,28 @@ def _parse_excel_openpyxl(file_path: str) -> Tuple[List[Dict], Dict]:
     except Exception as e:
         raise ValueError(f"无法解析Excel文件: {e}")
     
-    # 检查是否有 "中国" sheet - 特殊结构处理
-    if "中国" in wb.sheetnames:
-        # 调用特殊解析器模块
-        return parse_china_sheet(file_path)
-    
-    # 标准解析逻辑
-    texts = []
-    index = 0
-    total_cells = 0
-    formula_count = 0
-    
-    for sheet_name in wb.sheetnames:
-        ws = wb[sheet_name]
+    try:
+        china_sheet_name = find_china_sheet_name(wb.sheetnames)
+        if china_sheet_name:
+            return parse_china_sheet(file_path, china_sheet_name)
         
-        for row_idx, row in enumerate(ws.iter_rows()):
-            for col_idx, cell in enumerate(row):
+        # 标准解析逻辑
+        texts = []
+        index = 0
+        total_cells = 0
+        formula_count = 0
+        skipped_large_sheets = []
+        
+        for sheet_name in wb.sheetnames:
+            ws = wb[sheet_name]
+            sheet_cell_count = ws.max_row * ws.max_column
+            if sheet_cell_count > MAX_STANDARD_EXCEL_CELLS:
+                skipped_large_sheets.append(sheet_name)
+                cells = sorted(ws._cells.values(), key=lambda cell: (cell.row, cell.column))
+            else:
+                cells = (cell for row in ws.iter_rows() for cell in row)
+            
+            for cell in cells:
                 if cell.value is not None:
                     # 检测是否是公式
                     is_formula = cell.data_type == 'f' or (isinstance(cell.value, str) and cell.value.startswith('='))
@@ -236,23 +245,27 @@ def _parse_excel_openpyxl(file_path: str) -> Tuple[List[Dict], Dict]:
                         texts.append({
                             "text": cell_text,
                             "sheet": sheet_name,
-                            "row": row_idx,
-                            "col": col_idx,
+                            "row": cell.row - 1,
+                            "col": cell.column - 1,
                             "index": index,
                             "is_formula": False,
                             "format": format_info
                         })
                         index += 1
                         total_cells += 1
-    
-    wb_info = {
-        "sheet_count": len(wb.sheetnames),
-        "sheet_names": wb.sheetnames,
-        "cell_count": total_cells,
-        "formula_count": formula_count
-    }
-    
-    return texts, wb_info
+        
+        wb_info = {
+            "sheet_count": len(wb.sheetnames),
+            "sheet_names": wb.sheetnames,
+            "cell_count": total_cells,
+            "formula_count": formula_count
+        }
+        if skipped_large_sheets:
+            wb_info["skipped_large_sheets"] = skipped_large_sheets
+        
+        return texts, wb_info
+    finally:
+        wb.close()
 
 
 def _parse_china_sheet(wb, file_path: str) -> Tuple[List[Dict], Dict]:
