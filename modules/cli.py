@@ -52,7 +52,8 @@ class CLI:
                 "api_key": self.config.get("api.api_key"),
                 "model_name": self.config.get("api.model_name"),
                 "temperature": self.config.get("llm.temperature"),
-                "max_tokens": self.config.get("llm.max_tokens")
+                "max_tokens": self.config.get("llm.max_tokens"),
+                "reasoning_effort": self.config.get("api.reasoning_effort") or ""
             }
         
         return create_llm_client(config)

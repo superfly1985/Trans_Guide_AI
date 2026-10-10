@@ -129,11 +129,12 @@ class APILLMClient(BaseLLMClient):
         model_name: str,
         temperature: float = 0.3,
         max_tokens: int = 2048,
-        group_id: str = ""
+        group_id: str = "",
+        reasoning_effort: str = ""
     ):
         """
         初始化API LLM客户端
-        
+
         Args:
             base_url: API基础URL
             api_key: API密钥
@@ -141,6 +142,7 @@ class APILLMClient(BaseLLMClient):
             temperature: 温度参数
             max_tokens: 最大生成token数
             group_id: MiniMax的Group ID
+            reasoning_effort: 思考深度（minimal/low/medium/high），留空则不传参
         """
         self.base_url = base_url
         self.api_key = api_key
@@ -148,8 +150,9 @@ class APILLMClient(BaseLLMClient):
         self.temperature = temperature
         self.max_tokens = max_tokens
         self.group_id = group_id
+        self.reasoning_effort = reasoning_effort
         self._client = None
-        
+
         self._init_client()
     
     def _init_client(self):
@@ -174,17 +177,21 @@ class APILLMClient(BaseLLMClient):
         max_tokens_val = kwargs.pop("max_tokens", self.max_tokens)
         temperature_val = kwargs.pop("temperature", self.temperature)
 
+        request_params = {
+            "model": self.model_name,
+            "messages": [
+                {"role": "system", "content": system_msg},
+                {"role": "user", "content": prompt}
+            ],
+            "max_tokens": max_tokens_val,
+            "temperature": temperature_val
+        }
+        if self.reasoning_effort:
+            request_params["reasoning_effort"] = self.reasoning_effort
+
         try:
-            response = self._client.chat.completions.create(
-                model=self.model_name,
-                messages=[
-                    {"role": "system", "content": system_msg},
-                    {"role": "user", "content": prompt}
-                ],
-                max_tokens=max_tokens_val,
-                temperature=temperature_val
-            )
-            
+            response = self._client.chat.completions.create(**request_params)
+
             return response.choices[0].message.content.strip()
         except Exception as e:
             error_str = str(e).lower()
@@ -207,16 +214,20 @@ class APILLMClient(BaseLLMClient):
             raise RuntimeError("API客户端未初始化")
         
         try:
-            stream = self._client.chat.completions.create(
-                model=self.model_name,
-                messages=[
+            request_params = {
+                "model": self.model_name,
+                "messages": [
                     {"role": "system", "content": "You are a helpful assistant."},
                     {"role": "user", "content": prompt}
                 ],
-                max_tokens=kwargs.get("max_tokens", self.max_tokens),
-                stream=True,
-                extra_body={"reasoning_split": True}
-            )
+                "max_tokens": kwargs.get("max_tokens", self.max_tokens),
+                "stream": True,
+                "extra_body": {"reasoning_split": True}
+            }
+            if self.reasoning_effort:
+                request_params["reasoning_effort"] = self.reasoning_effort
+
+            stream = self._client.chat.completions.create(**request_params)
             
             for chunk in stream:
                 content = chunk.choices[0].delta.content
@@ -273,7 +284,8 @@ class LLMClient:
                 model_name=api_config.get("model_name", ""),
                 temperature=llm_config.get("temperature", 0.3),
                 max_tokens=llm_config.get("max_tokens", 2048),
-                group_id=api_config.get("group_id", "")
+                group_id=api_config.get("group_id", ""),
+                reasoning_effort=api_config.get("reasoning_effort", "")
             )
         else:
             raise ValueError(f"不支持的LLM类型: {llm_type}")
@@ -333,7 +345,8 @@ def create_llm_client(config: Dict) -> BaseLLMClient:
             model_name=config.get("model_name", ""),
             temperature=config.get("temperature", 0.3),
             max_tokens=config.get("max_tokens", 2048),
-            group_id=config.get("group_id", "")
+            group_id=config.get("group_id", ""),
+            reasoning_effort=config.get("reasoning_effort", "")
         )
     else:
         raise ValueError(f"不支持的LLM类型: {llm_type}")

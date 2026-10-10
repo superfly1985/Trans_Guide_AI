@@ -7,7 +7,8 @@
   "api": {
     "base_url": "https://api.minimaxi.com/v1",
     "api_key": "***REMOVED***",
-    "model_name": "MiniMax-M2.7",
+    "model_name": "MiniMax-M3.1-Flash-Preview",
+    "reasoning_effort": "low",
     "group_id": ""
   },
   "translation": {
@@ -26,5 +27,21 @@
   "extraction": {
     "term_batch_size": 20,
     "min_term_length": 2
+  },
+  "uap": {
+    "enabled": true,
+    "base_url": "https://uap.meta-qa.cn",
+    "project_id": "12ec0fe3-3091-487f-af17-beddc8b52811",
+    "scope": "openid profile",
+    "clients": {
+      "production": {
+        "client_id": "ksd_mf-0ofwebNsNsAanBvHIvwZM",
+        "redirect_uri": "https://translation.meta-qa.cn/auth/uap/callback"
+      },
+      "local": {
+        "client_id": "ksd_7K6N0ue5_ZBzrFwHujeIwD7B",
+        "redirect_uri": "http://localhost:5556/auth/uap/callback"
+      }
+    }
   }
 }
