@@ -16,6 +16,7 @@ from functools import wraps
 
 from flask import Flask, render_template, request, jsonify, send_file
 from werkzeug.utils import secure_filename
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 # 版本信息
 APP_VERSION = 'v1.3.3'
@@ -40,12 +41,16 @@ from modules.llm_client import LLMClient
 from modules import file_exporter
 from modules.logger import setup_logger
 from modules.user_db import UserDatabase
+from modules.uap_auth import UapAuth, UapAuthError
 from modules.bilingual_detector import detect_bilingual_pairs, BilingualDetector
 from modules.llm_term_extractor import extract_terms_with_llm, LLMTermExtractor
 from modules.chroma_worker import get_chroma_worker
 
 app = Flask(__name__)
 app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024  # 50MB
+
+# 生产环境经 nginx 反代,消费 X-Forwarded-Proto/For 以获得正确的协议与客户端IP
+app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=1, x_for=1)
 
 # 设置日志
 logger = setup_logger('logs/web.log')
@@ -68,6 +73,18 @@ user_db = UserDatabase(str(DATA_DIR / 'users.db'))
 
 # 初始化 ChromaDB 后台同步工作器
 chroma_worker = get_chroma_worker(tm_db)
+
+
+def _load_uap_config():
+    """从 config.json 读取 KSD-UAP 配置"""
+    try:
+        with open(BASE_DIR / 'config.json', 'r', encoding='utf-8') as f:
+            return json.load(f).get('uap', {})
+    except Exception:
+        return {}
+
+
+uap_auth = UapAuth(_load_uap_config())
 
 
 # 全局 LLM 客户端（延迟初始化）
@@ -580,6 +597,153 @@ def refresh_auth():
     except Exception as e:
         logger.error(f"刷新登录失败: {e}")
         return jsonify({'success': False, 'error': str(e)})
+
+
+# ========================================
+# KSD-UAP 统一登录
+# ========================================
+
+@app.route('/api/auth/uap/status')
+def uap_status():
+    """UAP 统一登录是否可用"""
+    return jsonify({'success': True, 'enabled': uap_auth.enabled})
+
+
+@app.route('/api/auth/uap/start', methods=['POST'])
+def uap_start():
+    """发起 UAP 登录：创建服务端事务，返回授权页地址"""
+    if not uap_auth.enabled:
+        return jsonify({'success': False, 'error': '统一登录未启用'}), 400
+    try:
+        authorize_url = uap_auth.start_login(request.host)
+    except UapAuthError as e:
+        return jsonify({'success': False, 'error': str(e)}), 400
+    except Exception as e:
+        logger.error(f"[UAP] 发起登录失败: {e}")
+        return jsonify({'success': False, 'error': '发起登录失败，请稍后重试'}), 500
+    return jsonify({'success': True, 'authorize_url': authorize_url})
+
+
+def _uap_error_page(message):
+    return render_template('uap_result.html', payload={'success': False, 'message': message})
+
+
+@app.route('/auth/uap/callback')
+def uap_callback():
+    """UAP 授权码回调：校验事务 → 兑换 Token → 验证 JWT → 绑定/开户/建会话"""
+    if request.args.get('error'):
+        logger.warning(f"[UAP] 授权被拒绝或出错: {request.args.get('error')}")
+        return _uap_error_page('UAP 认证未完成，请重新发起登录')
+
+    try:
+        claims = uap_auth.complete_login(request.args.get('state', ''), request.args.get('code', ''))
+    except UapAuthError as e:
+        logger.warning(f"[UAP] 回调校验失败: {e}")
+        return _uap_error_page(str(e))
+    except Exception as e:
+        logger.error(f"[UAP] 回调处理异常: {e}")
+        return _uap_error_page('登录处理异常，请重新发起登录')
+
+    user = user_db.get_user_by_uap_id(claims.get('sub', ''))
+
+    if user:
+        if user['status'] == 'pending':
+            return _uap_error_page('账号正在等待审批，请联系管理员')
+        if user['status'] == 'rejected':
+            return _uap_error_page('账号已被拒绝，请联系管理员')
+        if user['status'] == 'disabled':
+            return _uap_error_page('账号已被禁用，请联系管理员')
+        session_result = user_db.issue_session(
+            user['id'], request.remote_addr, request.headers.get('User-Agent', ''))
+        if not session_result.get('success'):
+            return _uap_error_page(session_result.get('message', '创建会话失败'))
+        logger.info(f"[UAP] 登录成功 user_id={user['id']}")
+        return render_template('uap_result.html', payload={
+            'success': True,
+            'message': '',
+            'user': session_result['user'],
+            'refresh_token': session_result['refresh_token'],
+        })
+
+    # 未绑定 UID：进入项目自己的关联/开户页
+    bind_token = uap_auth.create_bind_ticket(claims)
+    return render_template(
+        'uap_bind.html',
+        bind_token=bind_token,
+        display_name=claims.get('name') or claims.get('preferred_username') or claims.get('sub', '')[:8],
+        employee_number=claims.get('employee_number') or ''
+    )
+
+
+def _uap_finish_session(bind_token, user_id):
+    """消费绑定票据,绑定 UID 并创建会话"""
+    claims = uap_auth.consume_bind_ticket(bind_token)
+    bind_result = user_db.bind_uap_user(user_id, claims.get('sub', ''))
+    if not bind_result.get('success'):
+        return jsonify({'success': False, 'message': bind_result.get('message')}), 400
+    session_result = user_db.issue_session(
+        user_id, request.remote_addr, request.headers.get('User-Agent', ''))
+    if not session_result.get('success'):
+        return jsonify({'success': False, 'message': session_result.get('message')}), 400
+    logger.info(f"[UAP] UID 绑定成功 user_id={user_id}")
+    return jsonify({
+        'success': True,
+        'user': session_result['user'],
+        'refresh_token': session_result['refresh_token'],
+    })
+
+
+@app.route('/api/auth/uap/link', methods=['POST'])
+def uap_link():
+    """UAP 首次登录：验证旧账号密码后绑定 UID"""
+    try:
+        data = request.json or {}
+        bind_token = (data.get('bind_token') or '').strip()
+        username = (data.get('username') or '').strip()
+        password = (data.get('password') or '').strip()
+        if not bind_token or not username or not password:
+            return jsonify({'success': False, 'message': '请输入用户名和密码'}), 400
+        user = user_db.verify_credentials(username, password)
+        if not user:
+            return jsonify({'success': False, 'message': '用户名或密码错误，或账号未通过审批'}), 400
+        return _uap_finish_session(bind_token, user['id'])
+    except UapAuthError as e:
+        return jsonify({'success': False, 'message': str(e)}), 400
+    except Exception as e:
+        logger.error(f"[UAP] 关联账号失败: {e}")
+        return jsonify({'success': False, 'message': '操作失败，请重试'}), 500
+
+
+@app.route('/api/auth/uap/create', methods=['POST'])
+def uap_create():
+    """UAP 首次登录：自动创建最小账号并直接激活"""
+    try:
+        data = request.json or {}
+        bind_token = (data.get('bind_token') or '').strip()
+        if not bind_token:
+            return jsonify({'success': False, 'message': '绑定会话无效，请重新发起登录'}), 400
+        claims = uap_auth.consume_bind_ticket(bind_token)
+        username = claims.get('preferred_username') or claims.get('name') or ''
+        email = claims.get('email') or ''
+        create_result = user_db.create_uap_user(claims.get('sub', ''), username, email)
+        if not create_result.get('success'):
+            return jsonify({'success': False, 'message': create_result.get('message')}), 400
+        user_id = create_result['user']['id']
+        session_result = user_db.issue_session(
+            user_id, request.remote_addr, request.headers.get('User-Agent', ''))
+        if not session_result.get('success'):
+            return jsonify({'success': False, 'message': session_result.get('message')}), 400
+        logger.info(f"[UAP] 自动开户并登录 user_id={user_id}")
+        return jsonify({
+            'success': True,
+            'user': session_result['user'],
+            'refresh_token': session_result['refresh_token'],
+        })
+    except UapAuthError as e:
+        return jsonify({'success': False, 'message': str(e)}), 400
+    except Exception as e:
+        logger.error(f"[UAP] 自动开户失败: {e}")
+        return jsonify({'success': False, 'message': '操作失败，请重试'}), 500
 
 
 @app.route('/api/user/settings', methods=['PUT'])

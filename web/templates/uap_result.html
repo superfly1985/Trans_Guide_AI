@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>UAP 登录结果 - TransGuide</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: #16161d;
+            color: #ededf2;
+        }
+        .card {
+            width: min(400px, calc(100vw - 48px));
+            background: #1e1e27;
+            border: 1px solid #2f2f3a;
+            border-radius: 12px;
+            padding: 32px 28px;
+            text-align: center;
+        }
+        .icon {
+            width: 44px; height: 44px;
+            border-radius: 50%;
+            display: flex; align-items: center; justify-content: center;
+            margin: 0 auto 16px;
+            font-size: 22px;
+        }
+        .icon.ok { background: rgba(63, 185, 80, 0.15); color: #3fb950; }
+        .icon.fail { background: rgba(248, 81, 73, 0.15); color: #f85149; }
+        h1 { font-size: 17px; font-weight: 600; margin-bottom: 8px; }
+        p { font-size: 13px; color: #9b9ba7; line-height: 1.6; }
+        a { color: #6ea8fe; text-decoration: none; }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <div class="icon {{ 'ok' if payload.success else 'fail' }}">{{ '✓' if payload.success else '!' }}</div>
+        <h1>{{ '登录成功' if payload.success else '登录失败' }}</h1>
+        <p id="message">{{ payload.message }}</p>
+        <p id="fallback" style="display: none; margin-top: 12px;"><a href="/">返回 TransGuide</a></p>
+    </div>
+    <script>
+        const payload = {{ payload | tojson }};
+
+        function persistSession() {
+            if (!payload.success) return;
+            localStorage.setItem('user', JSON.stringify(payload.user));
+            localStorage.setItem('userId', String(payload.user.id));
+            localStorage.setItem('refreshToken', payload.refresh_token);
+            localStorage.removeItem('guestCount');
+        }
+
+        persistSession();
+
+        if (window.opener && window.opener !== window) {
+            try {
+                window.opener.postMessage({
+                    type: 'ksd-uap-login-result',
+                    success: payload.success,
+                    message: payload.message || ''
+                }, window.location.origin);
+            } catch (e) { /* opener 跨域或已关闭时忽略 */ }
+            window.close();
+        } else if (payload.success) {
+            window.location.replace('/');
+        } else {
+            document.getElementById('fallback').style.display = 'block';
+        }
+    </script>
+</body>
+</html>

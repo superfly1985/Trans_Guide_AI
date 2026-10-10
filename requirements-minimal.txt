@@ -14,5 +14,9 @@ openai>=1.0.0
 Flask>=2.3.0
 Werkzeug>=2.3.0
 
+# KSD-UAP 统一登录 (JWKS 验签)
+PyJWT>=2.8.0
+cryptography>=41.0.0
+
 # 辅助工具
 tqdm>=4.65.0

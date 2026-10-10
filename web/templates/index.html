@@ -858,6 +858,8 @@
                 </div>
                 <div class="auth-form-error" id="loginError"></div>
                 <button class="auth-submit-btn" id="doLoginBtn">登录</button>
+                <div class="auth-divider" id="uapDivider" style="display: none;"><span>或</span></div>
+                <button class="auth-uap-btn" id="uapLoginBtn" style="display: none;">使用 KSD-UAP 登录</button>
             </div>
 
             <!-- 注册表单 -->
@@ -1056,6 +1058,7 @@
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+    <script src="{{ url_for('static', filename='translation_helpers.js') }}?v={{ app_version }}"></script>
     <script src="{{ url_for('static', filename='app.js') }}?v={{ app_version }}"></script>
 </body>
 </html>

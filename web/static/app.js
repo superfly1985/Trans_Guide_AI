@@ -361,6 +361,11 @@ function bindTermManagementEvents() {
     // 注册按钮
     document.getElementById('doRegisterBtn')?.addEventListener('click', doRegister);
 
+    // KSD-UAP 统一登录
+    document.getElementById('uapLoginBtn')?.addEventListener('click', startUapLogin);
+    window.addEventListener('message', handleUapMessage);
+    initUapLoginStatus();
+
     // 管理员弹窗关闭
     document.getElementById('closeAdminModal')?.addEventListener('click', closeAdminModal);
     document.getElementById('adminModal')?.addEventListener('click', (e) => {
@@ -2632,6 +2637,20 @@ async function translateFile() {
         showToast('请先上传文件');
         return;
     }
+
+    const directionWarning = window.TransGuideHelpers
+        ? window.TransGuideHelpers.getDirectionMismatchWarning(
+            state.fileBlocks,
+            state.translationDirection || 'en2zh'
+        )
+        : null;
+    if (directionWarning) {
+        const shouldContinue = confirm(`${directionWarning.message}\n\n点击“确定”仍然继续，点击“取消”返回切换翻译方向。`);
+        if (!shouldContinue) {
+            showToast('已取消翻译，请检查翻译方向');
+            return;
+        }
+    }
     
     elements.translateFileBtn.disabled = true;
     elements.translateFileBtn.textContent = '翻译中...';
@@ -2777,7 +2796,9 @@ async function translateFile() {
                     }
                 }
                 
-                completed += actualCount;
+                completed = window.TransGuideHelpers
+                    ? window.TransGuideHelpers.calculateCompletedCount(completed, data.translations, indexMapping, total)
+                    : Math.min(total, completed + Math.min(actualCount, expectedCount));
                 console.log('[LLM链路] 批次完成，累计完成:', completed, '/', total);
                 
                 // 更新进度（实际进度）
@@ -3139,6 +3160,77 @@ function logout() {
     localStorage.removeItem('refreshToken');
     updateUserUI();
     showToast('已退出登录');
+}
+
+// ========================================
+// KSD-UAP 统一登录
+// ========================================
+
+async function initUapLoginStatus() {
+    try {
+        const response = await fetch('/api/auth/uap/status');
+        const data = await response.json();
+        if (!data.enabled) return;
+        document.getElementById('uapDivider').style.display = 'flex';
+        document.getElementById('uapLoginBtn').style.display = 'block';
+    } catch (error) {
+        /* UAP 状态不可用时保持隐藏 */
+    }
+}
+
+async function startUapLogin() {
+    const errorEl = document.getElementById('loginError');
+    try {
+        const response = await fetch('/api/auth/uap/start', { method: 'POST' });
+        const data = await response.json();
+        if (!data.success) {
+            errorEl.textContent = data.error || '无法发起统一登录';
+            return;
+        }
+        const width = 480;
+        const height = 720;
+        const left = Math.max(0, Math.round((window.screen.width - width) / 2));
+        const top = Math.max(0, Math.round((window.screen.height - height) / 2));
+        const popup = window.open(
+            data.authorize_url,
+            'ksd-uap-login',
+            `popup=yes,width=${width},height=${height},left=${left},top=${top}`
+        );
+        // 弹窗被浏览器拦截时整页跳转
+        if (!popup) {
+            window.location.assign(data.authorize_url);
+        }
+    } catch (error) {
+        errorEl.textContent = '无法发起统一登录，请重试';
+    }
+}
+
+function handleUapMessage(event) {
+    if (event.origin !== window.location.origin) return;
+    const data = event.data;
+    if (!data || data.type !== 'ksd-uap-login-result') return;
+    if (!data.success) {
+        showToast(data.message || '统一登录失败');
+        return;
+    }
+    finishUapLogin();
+}
+
+function finishUapLogin() {
+    const user = JSON.parse(localStorage.getItem('user') || 'null');
+    const refreshToken = localStorage.getItem('refreshToken');
+    if (!user || !refreshToken) {
+        showToast('统一登录状态异常，请重试');
+        return;
+    }
+    state.user = user;
+    state.refreshToken = refreshToken;
+    state.guestCount = 0;
+    document.getElementById('authModal').classList.remove('auth-modal-forced');
+    closeAuthModal();
+    updateUserUI();
+    showToast('登录成功');
+    loadStats();
 }
 
 // ========================================

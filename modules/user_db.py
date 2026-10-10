@@ -51,6 +51,19 @@ class UserDatabase:
             )
         """)
 
+        # UAP 统一登录绑定字段（可空唯一）
+        try:
+            cursor.execute("ALTER TABLE users ADD COLUMN uap_user_id TEXT")
+        except sqlite3.OperationalError:
+            pass
+        try:
+            cursor.execute("ALTER TABLE users ADD COLUMN uap_bound_at TIMESTAMP")
+        except sqlite3.OperationalError:
+            pass
+        cursor.execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_users_uap_user_id ON users(uap_user_id)
+        """)
+
         # 登录日志表
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS login_logs (
@@ -376,6 +389,158 @@ class UserDatabase:
         if row:
             return dict(row)
         return None
+
+    # ========================================
+    # UAP 统一登录绑定
+    # ========================================
+
+    def get_user_by_uap_id(self, uap_user_id: str) -> Optional[Dict]:
+        """根据 UAP UID 查找已绑定的用户"""
+        if not uap_user_id:
+            return None
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT id, username, email, role, status, last_login, uap_user_id
+            FROM users WHERE uap_user_id = ?
+        """, (uap_user_id,))
+        row = cursor.fetchone()
+        conn.close()
+        return dict(row) if row else None
+
+    def verify_credentials(self, username: str, password: str) -> Optional[Dict]:
+        """验证用户名密码（仅限已审批账号），用于 UAP UID 关联旧账号"""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT id, username, email, password_hash, salt, role, status, uap_user_id
+            FROM users WHERE username = ?
+        """, (username,))
+        row = cursor.fetchone()
+        conn.close()
+        if not row:
+            return None
+        user = dict(row)
+        if not self._verify_password(password, user['salt'], user['password_hash']):
+            return None
+        if user['status'] != 'approved':
+            return None
+        user.pop('password_hash', None)
+        user.pop('salt', None)
+        return user
+
+    def bind_uap_user(self, user_id: int, uap_user_id: str) -> Dict:
+        """将 UAP UID 绑定到项目账号，UID 冲突时拒绝自动改绑"""
+        if not uap_user_id:
+            return {'success': False, 'message': 'UAP UID 不能为空'}
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT id FROM users WHERE uap_user_id = ? AND id != ?",
+            (uap_user_id, user_id)
+        )
+        if cursor.fetchone():
+            conn.close()
+            return {'success': False, 'message': '该 UAP 账号已绑定到其他项目账号，请联系管理员审查'}
+        cursor.execute(
+            "UPDATE users SET uap_user_id = ?, uap_bound_at = ? WHERE id = ?",
+            (uap_user_id, datetime.now(), user_id)
+        )
+        cursor.execute("""
+            INSERT INTO approval_logs (user_id, action, performed_by, reason)
+            VALUES (?, ?, ?, ?)
+        """, (user_id, 'uap_bind', user_id, 'UAP 统一登录绑定'))
+        conn.commit()
+        conn.close()
+        return {'success': True, 'message': '绑定成功'}
+
+    def create_uap_user(self, uap_user_id: str, username: str, email: str = "") -> Dict:
+        """UAP 首次登录自动开户：最小账号、直接激活、随机不可登录密码"""
+        if not uap_user_id:
+            return {'success': False, 'message': 'UAP UID 不能为空'}
+
+        base = ''.join(ch for ch in (username or '').strip().replace(' ', '_')
+                       if ch.isalnum() or ch in '_.-')[:50]
+        if len(base) < 3:
+            base = f"uap_{uap_user_id[:8]}"
+
+        conn = self._get_connection()
+        cursor = conn.cursor()
+
+        candidate = base
+        suffix = 2
+        while True:
+            cursor.execute("SELECT id FROM users WHERE username = ?", (candidate,))
+            if not cursor.fetchone():
+                break
+            candidate = f"{base}_{suffix}"
+            suffix += 1
+
+        # 邮箱已被其他账号占用时置空，避免唯一约束冲突
+        if email:
+            cursor.execute("SELECT id FROM users WHERE email = ?", (email,))
+            if cursor.fetchone():
+                email = ""
+
+        salt = secrets.token_hex(16)
+        password_hash = self._hash_password(secrets.token_hex(32), salt)
+        try:
+            cursor.execute("""
+                INSERT INTO users (username, email, password_hash, salt, role, status,
+                                   uap_user_id, uap_bound_at, approved_at)
+                VALUES (?, ?, ?, ?, 'user', 'approved', ?, ?, ?)
+            """, (candidate, email or None, password_hash, salt,
+                  uap_user_id, datetime.now(), datetime.now()))
+        except sqlite3.IntegrityError:
+            conn.close()
+            return {'success': False, 'message': '创建账号失败，请重试'}
+
+        user_id = cursor.lastrowid
+        cursor.execute("""
+            INSERT INTO approval_logs (user_id, action, performed_by, reason)
+            VALUES (?, ?, ?, ?)
+        """, (user_id, 'uap_auto_create', user_id, 'UAP 首次登录自动开户'))
+        conn.commit()
+
+        cursor.execute(
+            "SELECT id, username, email, role, status FROM users WHERE id = ?",
+            (user_id,)
+        )
+        user = dict(cursor.fetchone())
+        conn.close()
+        return {'success': True, 'user': user}
+
+    def issue_session(self, user_id: int, ip_address: str = "", user_agent: str = "") -> Dict:
+        """为已认证用户创建会话（refresh_token），返回结构与 login() 一致"""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT id, username, email, role, status, last_login
+            FROM users WHERE id = ?
+        """, (user_id,))
+        row = cursor.fetchone()
+        if not row:
+            conn.close()
+            return {'success': False, 'message': '用户不存在'}
+
+        user = dict(row)
+        if user['status'] != 'approved':
+            conn.close()
+            return {'success': False, 'message': '账号当前不可用，请联系管理员'}
+
+        refresh_token = secrets.token_hex(32)
+        cursor.execute(
+            "UPDATE users SET last_login = ?, refresh_token = ? WHERE id = ?",
+            (datetime.now(), refresh_token, user_id)
+        )
+        cursor.execute("""
+            INSERT INTO login_logs (user_id, ip_address, user_agent, success)
+            VALUES (?, ?, ?, ?)
+        """, (user_id, ip_address, user_agent, True))
+        conn.commit()
+        conn.close()
+
+        return {'success': True, 'user': user, 'refresh_token': refresh_token}
 
     def approve_user(self, user_id: int, admin_id: int, reason: str = "") -> Dict:
         """

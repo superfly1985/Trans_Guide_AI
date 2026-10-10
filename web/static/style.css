@@ -3970,6 +3970,42 @@ body[data-direction="zh2en"] #targetText:focus {
     background: #2563eb;
 }
 
+.auth-divider {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin: 16px 0 4px;
+    color: var(--text-tertiary);
+    font-size: 12px;
+}
+
+.auth-divider::before,
+.auth-divider::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: var(--border-default);
+}
+
+.auth-uap-btn {
+    width: 100%;
+    padding: 11px;
+    background: transparent;
+    border: 1px solid var(--border-default);
+    border-radius: 6px;
+    color: var(--text-primary);
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: border-color var(--transition-fast), background var(--transition-fast);
+    margin-top: 12px;
+}
+
+.auth-uap-btn:hover {
+    border-color: var(--accent-primary);
+    background: var(--accent-glow);
+}
+
 /* ========================================
    翻译历史页面 - Linear 极简风格
    ======================================== */

@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>关联 TransGuide 账号</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: #16161d;
+            color: #ededf2;
+        }
+        .card {
+            width: min(400px, calc(100vw - 48px));
+            background: #1e1e27;
+            border: 1px solid #2f2f3a;
+            border-radius: 12px;
+            padding: 32px 28px;
+        }
+        .icon {
+            width: 44px; height: 44px;
+            border-radius: 50%;
+            display: flex; align-items: center; justify-content: center;
+            margin: 0 auto 16px;
+            background: rgba(110, 168, 254, 0.15);
+            color: #6ea8fe;
+            font-size: 22px;
+        }
+        h1 { font-size: 17px; font-weight: 600; text-align: center; margin-bottom: 6px; }
+        .subtitle { font-size: 13px; color: #9b9ba7; text-align: center; line-height: 1.6; margin-bottom: 20px; }
+        .section { border-top: 1px solid #2f2f3a; padding-top: 18px; margin-top: 18px; }
+        .section-title { font-size: 13px; font-weight: 600; margin-bottom: 12px; }
+        .hint { font-size: 12px; color: #9b9ba7; margin-bottom: 12px; line-height: 1.6; }
+        label { display: block; font-size: 12px; color: #9b9ba7; margin: 10px 0 4px; }
+        input {
+            width: 100%;
+            background: #16161d;
+            border: 1px solid #2f2f3a;
+            border-radius: 6px;
+            color: #ededf2;
+            font-size: 13px;
+            padding: 9px 10px;
+            outline: none;
+        }
+        input:focus { border-color: #6ea8fe; }
+        button {
+            width: 100%;
+            border: none;
+            border-radius: 6px;
+            font-size: 13px;
+            font-weight: 600;
+            padding: 10px 0;
+            cursor: pointer;
+            margin-top: 14px;
+        }
+        button:disabled { opacity: 0.6; cursor: not-allowed; }
+        .primary { background: #6ea8fe; color: #16161d; }
+        .secondary { background: transparent; color: #ededf2; border: 1px solid #2f2f3a; }
+        .error { font-size: 12px; color: #f85149; margin-top: 10px; display: none; }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <div class="icon">U</div>
+        <h1>关联 TransGuide 账号</h1>
+        <div class="subtitle">
+            UAP 账号：<strong>{{ display_name }}</strong>{% if employee_number %}（工号 {{ employee_number }}）{% endif %}<br>
+            该 UAP 账号尚未绑定本项目账号。若已有账号请验证后绑定；否则可直接创建新账号。
+        </div>
+
+        <div class="section">
+            <div class="section-title">关联现有账号</div>
+            <div class="hint">使用原有的 TransGuide 用户名和密码验证，验证通过后绑定 UAP 账号。</div>
+            <label for="linkUsername">用户名</label>
+            <input type="text" id="linkUsername" autocomplete="username">
+            <label for="linkPassword">密码</label>
+            <input type="password" id="linkPassword" autocomplete="current-password">
+            <button class="primary" id="linkBtn">验证并绑定</button>
+        </div>
+
+        <div class="section">
+            <div class="section-title">创建新账号</div>
+            <div class="hint">自动创建并激活一个最小账号，后续可在系统内补充资料。</div>
+            <button class="secondary" id="createBtn">创建新账号并登录</button>
+        </div>
+
+        <div class="error" id="errorBox"></div>
+    </div>
+    <script>
+        const bindToken = {{ bind_token | tojson }};
+
+        function showError(message) {
+            const box = document.getElementById('errorBox');
+            box.textContent = message;
+            box.style.display = 'block';
+        }
+
+        function finishLogin(data) {
+            localStorage.setItem('user', JSON.stringify(data.user));
+            localStorage.setItem('userId', String(data.user.id));
+            localStorage.setItem('refreshToken', data.refresh_token);
+            localStorage.removeItem('guestCount');
+            if (window.opener && window.opener !== window) {
+                try {
+                    window.opener.postMessage({
+                        type: 'ksd-uap-login-result',
+                        success: true,
+                        message: ''
+                    }, window.location.origin);
+                } catch (e) { /* opener 跨域或已关闭时忽略 */ }
+                window.close();
+            } else {
+                window.location.replace('/');
+            }
+        }
+
+        async function post(path, body, button) {
+            button.disabled = true;
+            try {
+                const response = await fetch(path, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body)
+                });
+                const data = await response.json();
+                if (data.success) {
+                    finishLogin(data);
+                } else {
+                    showError(data.message || data.error || '操作失败，请重试');
+                    button.disabled = false;
+                }
+            } catch (e) {
+                showError('网络错误，请重试');
+                button.disabled = false;
+            }
+        }
+
+        document.getElementById('linkBtn').addEventListener('click', (event) => {
+            const username = document.getElementById('linkUsername').value.trim();
+            const password = document.getElementById('linkPassword').value;
+            if (!username || !password) {
+                showError('请输入用户名和密码');
+                return;
+            }
+            post('/api/auth/uap/link', { bind_token: bindToken, username, password }, event.target);
+        });
+
+        document.getElementById('linkPassword').addEventListener('keydown', (event) => {
+            if (event.key === 'Enter') document.getElementById('linkBtn').click();
+        });
+
+        document.getElementById('createBtn').addEventListener('click', (event) => {
+            post('/api/auth/uap/create', { bind_token: bindToken }, event.target);
+        });
+    </script>
+</body>
+</html>
