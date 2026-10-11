@@ -64,3 +64,7 @@ Thumbs.db
 .analysis/
 .superpowers/
 docs/superpowers/
+
+# 本地密钥与部署临时文件（严禁入库）
+config.local.json
+.server_config.json
