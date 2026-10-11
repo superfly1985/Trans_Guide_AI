@@ -50,6 +50,10 @@ function getAuthHeaders() {
     if (state.user && state.user.id) {
         headers['X-User-ID'] = state.user.id;
     }
+    // 会话令牌：服务端校验 X-User-ID 与令牌的配对关系
+    if (state.refreshToken) {
+        headers['X-Session-Token'] = state.refreshToken;
+    }
     return headers;
 }
 
@@ -746,7 +750,7 @@ async function loadStats() {
     try {
         const response = await fetch('/api/stats', {
             headers: {
-                'X-User-ID': state.user.id
+                'X-User-ID': state.user.id, 'X-Session-Token': state.refreshToken
             }
         });
         
@@ -781,7 +785,7 @@ async function uploadGlossary(file) {
         const response = await fetch('/api/import/glossary', {
             method: 'POST',
             headers: {
-                'X-User-ID': state.user.id
+                'X-User-ID': state.user.id, 'X-Session-Token': state.refreshToken
             },
             body: formData
         });
@@ -957,7 +961,7 @@ async function processGlossaryImport() {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
-                'X-User-ID': state.user.id
+                'X-User-ID': state.user.id, 'X-Session-Token': state.refreshToken
             },
             body: JSON.stringify({
                 filepath: state.glossaryData.filepath,
@@ -998,7 +1002,7 @@ async function uploadImportFile(file) {
         const response = await fetch('/api/import/upload', {
             method: 'POST',
             headers: {
-                'X-User-ID': state.user.id
+                'X-User-ID': state.user.id, 'X-Session-Token': state.refreshToken
             },
             body: formData
         });
@@ -1257,7 +1261,7 @@ async function processImport() {
             method: 'POST',
             headers: { 
                 'Content-Type': 'application/json',
-                'X-User-ID': state.user.id
+                'X-User-ID': state.user.id, 'X-Session-Token': state.refreshToken
             },
             body: JSON.stringify({
                 filename: state.importFile,
@@ -1707,7 +1711,7 @@ async function batchImportFiles(files) {
                 const response = await fetch('/api/import/upload', {
                     method: 'POST',
                     headers: {
-                        'X-User-ID': state.user.id
+                        'X-User-ID': state.user.id, 'X-Session-Token': state.refreshToken
                     },
                     body: formData
                 });
@@ -1722,7 +1726,7 @@ async function batchImportFiles(files) {
                         method: 'POST',
                         headers: { 
                             'Content-Type': 'application/json',
-                            'X-User-ID': state.user.id
+                            'X-User-ID': state.user.id, 'X-Session-Token': state.refreshToken
                         },
                         body: JSON.stringify({
                             filename: data.filename,
@@ -1894,7 +1898,7 @@ async function loadMemoryStats() {
     try {
         const response = await fetch('/api/stats', {
             headers: {
-                'X-User-ID': state.user.id
+                'X-User-ID': state.user.id, 'X-Session-Token': state.refreshToken
             }
         });
         const data = await response.json();
@@ -1968,7 +1972,7 @@ async function saveAddMemory() {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
-                'X-User-ID': state.user.id
+                'X-User-ID': state.user.id, 'X-Session-Token': state.refreshToken
             },
             body: JSON.stringify({
                 original: source,
@@ -2354,8 +2358,10 @@ async function uploadTranslationFile(file) {
     try {
         console.log('[前端调试] 发送请求到 /api/upload');
         const fetchOptions = { method: 'POST', body: formData };
-        if (state.user && state.user.id) {
-            fetchOptions.headers = { 'X-User-ID': state.user.id };
+        if (state.user && state.user.id && state.refreshToken) {
+            fetchOptions.headers = {
+                'X-User-ID': state.user.id, 'X-Session-Token': state.refreshToken
+            };
         }
         const response = await fetch('/api/upload', fetchOptions);
         
@@ -2604,10 +2610,10 @@ async function downloadTranslatedFile() {
             ? state.downloadUrl
             : window.location.origin + state.downloadUrl;
 
-        // 添加user_id参数（仅登录用户）
-        if (state.user && state.user.id) {
+        // 添加user_id参数和会话令牌（仅登录用户）
+        if (state.user && state.user.id && state.refreshToken) {
             const separator = fullUrl.includes('?') ? '&' : '?';
-            fullUrl += `${separator}user_id=${state.user.id}`;
+            fullUrl += `${separator}user_id=${state.user.id}&session_token=${state.refreshToken}`;
         }
 
         // 创建一个临时的iframe来下载（避免页面跳转）
@@ -3310,7 +3316,7 @@ async function saveUserSettings() {
             method: 'PUT',
             headers: {
                 'Content-Type': 'application/json',
-                'X-User-ID': state.user.id
+                'X-User-ID': state.user.id, 'X-Session-Token': state.refreshToken
             },
             body: JSON.stringify({
                 old_password: oldPassword,
@@ -3375,7 +3381,7 @@ async function loadPendingUsers() {
 
     try {
         const response = await fetch('/api/admin/users/pending', {
-            headers: { 'X-User-ID': state.user.id }
+            headers: { 'X-User-ID': state.user.id, 'X-Session-Token': state.refreshToken }
         });
         const data = await response.json();
 
@@ -3418,7 +3424,7 @@ async function loadAllUsers() {
 
     try {
         const response = await fetch('/api/admin/users', {
-            headers: { 'X-User-ID': state.user.id }
+            headers: { 'X-User-ID': state.user.id, 'X-Session-Token': state.refreshToken }
         });
         const data = await response.json();
 
@@ -3476,7 +3482,7 @@ window.approveUser = async function(userId) {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
-                'X-User-ID': state.user.id
+                'X-User-ID': state.user.id, 'X-Session-Token': state.refreshToken
             },
             body: JSON.stringify({})
         });
@@ -3503,7 +3509,7 @@ window.rejectUser = async function(userId) {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
-                'X-User-ID': state.user.id
+                'X-User-ID': state.user.id, 'X-Session-Token': state.refreshToken
             },
             body: JSON.stringify({ reason })
         });
@@ -3530,7 +3536,7 @@ window.disableUser = async function(userId) {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
-                'X-User-ID': state.user.id
+                'X-User-ID': state.user.id, 'X-Session-Token': state.refreshToken
             },
             body: JSON.stringify({ reason })
         });
@@ -3576,7 +3582,7 @@ async function loadPendingUsersView() {
 
     try {
         const response = await fetch('/api/admin/users/pending', {
-            headers: { 'X-User-ID': state.user.id }
+            headers: { 'X-User-ID': state.user.id, 'X-Session-Token': state.refreshToken }
         });
         const data = await response.json();
 
@@ -3620,7 +3626,7 @@ async function loadAllUsersView() {
 
     try {
         const response = await fetch('/api/admin/users', {
-            headers: { 'X-User-ID': state.user.id }
+            headers: { 'X-User-ID': state.user.id, 'X-Session-Token': state.refreshToken }
         });
         const data = await response.json();
 
@@ -3678,7 +3684,7 @@ window.approveUserView = async function(userId) {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
-                'X-User-ID': state.user.id
+                'X-User-ID': state.user.id, 'X-Session-Token': state.refreshToken
             },
             body: JSON.stringify({})
         });
@@ -3705,7 +3711,7 @@ window.rejectUserView = async function(userId) {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
-                'X-User-ID': state.user.id
+                'X-User-ID': state.user.id, 'X-Session-Token': state.refreshToken
             },
             body: JSON.stringify({ reason })
         });
@@ -3732,7 +3738,7 @@ window.disableUserView = async function(userId) {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
-                'X-User-ID': state.user.id
+                'X-User-ID': state.user.id, 'X-Session-Token': state.refreshToken
             },
             body: JSON.stringify({ reason })
         });
@@ -3756,7 +3762,7 @@ window.enableUserView = async function(userId) {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
-                'X-User-ID': state.user.id
+                'X-User-ID': state.user.id, 'X-Session-Token': state.refreshToken
             },
             body: JSON.stringify({})
         });
@@ -3811,7 +3817,7 @@ async function saveUserEdit(e) {
             method: 'PUT',
             headers: {
                 'Content-Type': 'application/json',
-                'X-User-ID': state.user.id
+                'X-User-ID': state.user.id, 'X-Session-Token': state.refreshToken
             },
             body: JSON.stringify(body)
         });
@@ -3862,7 +3868,7 @@ async function loadStatsView() {
 async function loadStatsOverview() {
     try {
         const response = await fetch('/api/admin/stats/overview', {
-            headers: { 'X-User-ID': state.user.id }
+            headers: { 'X-User-ID': state.user.id, 'X-Session-Token': state.refreshToken }
         });
         const data = await response.json();
 
@@ -3891,7 +3897,7 @@ async function loadStatsTrend() {
     try {
         const response = await fetch(
             `/api/admin/stats/trend?days=${currentStatsDays}&metrics=files&metrics=llm_calls`,
-            { headers: { 'X-User-ID': state.user.id } }
+            { headers: { 'X-User-ID': state.user.id, 'X-Session-Token': state.refreshToken } }
         );
         const data = await response.json();
 
@@ -4019,7 +4025,7 @@ async function loadStatsDetail() {
     try {
         const response = await fetch(
             `/api/admin/stats/detail?type=${currentStatsType}&page=${currentStatsPage}&limit=10`,
-            { headers: { 'X-User-ID': state.user.id } }
+            { headers: { 'X-User-ID': state.user.id, 'X-Session-Token': state.refreshToken } }
         );
         const data = await response.json();
 
@@ -4358,9 +4364,9 @@ window.downloadHistoryFile = async function(filename) {
         const downloadUrl = `/api/download/${encodeURIComponent(filename)}`;
         let fullUrl = window.location.origin + downloadUrl;
 
-        // 添加user_id参数用于认证（仅登录用户）
-        if (state.user && state.user.id) {
-            fullUrl += `?user_id=${state.user.id}`;
+        // 添加user_id参数和会话令牌用于认证（仅登录用户）
+        if (state.user && state.user.id && state.refreshToken) {
+            fullUrl += `?user_id=${state.user.id}&session_token=${state.refreshToken}`;
         }
 
         // 创建隐藏的iframe来下载

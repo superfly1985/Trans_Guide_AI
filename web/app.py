@@ -14,12 +14,12 @@ from datetime import datetime
 from pathlib import Path
 from functools import wraps
 
-from flask import Flask, render_template, request, jsonify, send_file
+from flask import Flask, render_template, request, jsonify, send_file, g
 from werkzeug.utils import secure_filename
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 # 版本信息
-APP_VERSION = 'v1.3.3'
+APP_VERSION = 'v1.3.4'
 CSS_VERSION = 'v2.4'
 FRONTEND_VERSION = 'v2.4'
 BUILD_TIME = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
@@ -169,19 +169,48 @@ def allowed_file(filename, allowed_extensions):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in allowed_extensions
 
 
+SESSION_HEADER = 'X-Session-Token'
+
+
+def _request_session_token() -> str:
+    """获取会话令牌：Authorization Bearer > X-Session-Token 头 > session_token 查询参数（iframe 下载用）"""
+    auth = request.headers.get('Authorization', '')
+    if auth.startswith('Bearer '):
+        return auth[7:].strip()
+    token = request.headers.get(SESSION_HEADER, '')
+    if token:
+        return token.strip()
+    return (request.args.get('session_token') or '').strip()
+
+
+def _authenticate():
+    """校验 X-User-ID 与会话令牌的配对关系。
+
+    服务端只信任登录时签发、保存在 users.refresh_token 的随机令牌；
+    两者必须指向同一个用户，单靠伪造 X-User-ID 无法通过。
+    校验通过返回用户字典，否则返回 None。
+    """
+    user_id_raw = request.headers.get('X-User-ID') or request.args.get('user_id')
+    token = _request_session_token()
+    if not user_id_raw or not token:
+        return None
+    try:
+        user_id = int(user_id_raw)
+    except (TypeError, ValueError):
+        return None
+    return user_db.get_user_by_session(user_id, token)
+
+
 def login_required(f):
-    """登录验证装饰器 - 支持Header或URL参数传递user_id"""
+    """登录验证装饰器 - 用户ID须与会话令牌配对有效"""
     @wraps(f)
     def decorated_function(*args, **kwargs):
-        # 优先从Header获取，其次从URL参数获取
-        user_id = request.headers.get('X-User-ID') or request.args.get('user_id')
-        if not user_id:
+        user = _authenticate()
+        if not user:
             return jsonify({'success': False, 'error': '请先登录'}), 401
-
-        user = user_db.get_user_by_id(int(user_id))
-        if not user or user['status'] != 'approved':
+        if user['status'] != 'approved':
             return jsonify({'success': False, 'error': '账号未通过审批'}), 403
-
+        g.current_user = user
         return f(*args, **kwargs)
     return decorated_function
 
@@ -190,14 +219,14 @@ def admin_required(f):
     """管理员权限验证装饰器 - 仅管理员可访问"""
     @wraps(f)
     def decorated_function(*args, **kwargs):
-        user_id = request.headers.get('X-User-ID')
-        if not user_id:
+        user = _authenticate()
+        if not user:
             return jsonify({'success': False, 'error': '请先登录'}), 401
-
-        user = user_db.get_user_by_id(int(user_id))
-        if not user or user['role'] != 'admin':
+        if user['status'] != 'approved':
+            return jsonify({'success': False, 'error': '账号未通过审批'}), 403
+        if user['role'] != 'admin':
             return jsonify({'success': False, 'error': '需要管理员权限'}), 403
-
+        g.current_user = user
         return f(*args, **kwargs)
     return decorated_function
 
@@ -206,14 +235,14 @@ def manager_required(f):
     """主管及以上权限验证装饰器 - 管理员和主管可访问"""
     @wraps(f)
     def decorated_function(*args, **kwargs):
-        user_id = request.headers.get('X-User-ID')
-        if not user_id:
+        user = _authenticate()
+        if not user:
             return jsonify({'success': False, 'error': '请先登录'}), 401
-
-        user = user_db.get_user_by_id(int(user_id))
-        if not user or user['role'] not in ['admin', 'manager']:
+        if user['status'] != 'approved':
+            return jsonify({'success': False, 'error': '账号未通过审批'}), 403
+        if user['role'] not in ['admin', 'manager']:
             return jsonify({'success': False, 'error': '需要主管及以上权限'}), 403
-
+        g.current_user = user
         return f(*args, **kwargs)
     return decorated_function
 
@@ -565,13 +594,9 @@ def login():
 def get_current_user():
     """获取当前登录用户信息"""
     try:
-        user_id = request.headers.get('X-User-ID')
-        if not user_id:
-            return jsonify({'success': False, 'error': '未登录'})
-
-        user = user_db.get_user_by_id(int(user_id))
+        user = _authenticate()
         if not user:
-            return jsonify({'success': False, 'error': '用户不存在'})
+            return jsonify({'success': False, 'error': '未登录'}), 401
 
         return jsonify({'success': True, 'user': user})
     except Exception as e:
@@ -1522,6 +1547,7 @@ def _extract_glossary_from_blocks(blocks, filename=''):
 
 
 @app.route('/api/import/upload', methods=['POST'])
+@login_required
 def upload_import_file():
     """上传历史翻译文件进行分析"""
     # ========== 检查1: 添加详细日志确认执行路径 ==========
@@ -2035,6 +2061,7 @@ def translate_text():
 
 
 @app.route('/api/translate/batch', methods=['POST'])
+@login_required
 def translate_batch():
     """批量翻译文本"""
     try:
@@ -2288,6 +2315,7 @@ English translation 2
 # ========================================
 
 @app.route('/api/upload', methods=['POST'])
+@login_required
 def upload_file():
     """上传待翻译文件"""
     try:
@@ -2305,6 +2333,8 @@ def upload_file():
         storage_filename = f"{timestamp}_{original_filename}"
         filepath = UPLOAD_DIR / storage_filename
         file.save(str(filepath))
+        # 记录文件属主，供翻译/导出接口做属主校验
+        user_db.record_upload_file(storage_filename, g.current_user['id'])
         
         logger.info(f"上传文件: {filepath}")
         
@@ -2350,6 +2380,7 @@ def upload_file():
 
 
 @app.route('/api/translate/file', methods=['POST'])
+@login_required
 def translate_file():
     """翻译文件 - 重新解析完整文件并应用翻译，并记录历史"""
     try:
@@ -2360,10 +2391,15 @@ def translate_file():
         mode = data.get('mode', 'bilingual')
 
         # 获取当前用户信息
-        user_id_str = request.headers.get('X-User-ID', '0')
-        user_id = int(user_id_str) if user_id_str.isdigit() and int(user_id_str) > 0 else 0
-        user = user_db.get_user_by_id(user_id) if user_id > 0 else None
-        username = user['username'] if user else '游客'
+        user_id = g.current_user['id']
+        user = g.current_user
+        username = user['username']
+
+        # 属主校验：只能导出自己上传的文件（管理员除外）
+        owner_id = user_db.get_upload_file_owner(filename)
+        if owner_id is None or (owner_id != user_id and user['role'] != 'admin'):
+            logger.warning(f"[安全] 用户 {user_id} 尝试导出无权文件: {filename} (属主: {owner_id})")
+            return jsonify({'success': False, 'error': '文件不存在或无权访问'}), 403
 
         logger.info(f"导出文件请求: {filename}, 原始文件名: {original_filename}, 翻译条目数: {len(translations)}, 用户: {username}")
 
@@ -2534,9 +2570,16 @@ def translate_file():
 
 
 @app.route('/api/download/<filename>')
+@login_required
 def download_file(filename):
-    """下载翻译后的文件"""
+    """下载翻译后的文件（仅属主或管理员）"""
     try:
+        # 属主校验：防止按文件名枚举下载他人翻译成果（管理员除外）
+        owner_id = user_db.get_output_file_owner(filename)
+        if owner_id is None or (owner_id != g.current_user['id'] and g.current_user['role'] != 'admin'):
+            logger.warning(f"[安全] 用户 {g.current_user['id']} 尝试下载无权文件: {filename} (属主: {owner_id})")
+            return jsonify({'success': False, 'error': '文件不存在或无权访问'}), 403
+
         filepath = OUTPUT_DIR / filename
         logger.info(f"[下载调试] 请求下载: {filename}")
         logger.info(f"[下载调试] 完整路径: {filepath}")

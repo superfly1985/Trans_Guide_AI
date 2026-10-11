@@ -64,6 +64,16 @@ class UserDatabase:
             CREATE UNIQUE INDEX IF NOT EXISTS idx_users_uap_user_id ON users(uap_user_id)
         """)
 
+        # 上传文件属主表（用于翻译文件接口的属主校验）
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS upload_files (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                filename TEXT UNIQUE NOT NULL,
+                user_id INTEGER NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
         # 登录日志表
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS login_logs (
@@ -389,6 +399,56 @@ class UserDatabase:
         if row:
             return dict(row)
         return None
+
+    def get_user_by_session(self, user_id: int, session_token: str) -> Optional[Dict]:
+        """按 用户ID+会话令牌 配对查询用户（令牌不匹配则视为未认证）"""
+        if not user_id or not session_token:
+            return None
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT id, username, email, role, status, last_login
+            FROM users WHERE id = ? AND refresh_token = ?
+        """, (user_id, session_token))
+        row = cursor.fetchone()
+        conn.close()
+        return dict(row) if row else None
+
+    def record_upload_file(self, filename: str, user_id: int) -> None:
+        """记录上传文件属主"""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT OR REPLACE INTO upload_files (filename, user_id, created_at)
+            VALUES (?, ?, ?)
+        """, (filename, user_id, datetime.now()))
+        conn.commit()
+        conn.close()
+
+    def get_upload_file_owner(self, filename: str) -> Optional[int]:
+        """查询上传文件属主，未记录返回 None"""
+        if not filename:
+            return None
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT user_id FROM upload_files WHERE filename = ?", (filename,))
+        row = cursor.fetchone()
+        conn.close()
+        return row["user_id"] if row else None
+
+    def get_output_file_owner(self, filename: str) -> Optional[int]:
+        """按输出文件名查询翻译历史属主，未记录返回 None"""
+        if not filename:
+            return None
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT user_id FROM translation_history
+            WHERE output_filename = ? ORDER BY id DESC LIMIT 1
+        """, (filename,))
+        row = cursor.fetchone()
+        conn.close()
+        return row["user_id"] if row else None
 
     # ========================================
     # UAP 统一登录绑定
