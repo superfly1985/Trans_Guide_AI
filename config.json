@@ -7,7 +7,7 @@
   "api": {
     "base_url": "https://api.minimaxi.com/v1",
     "api_key": "",
-    "model_name": "MiniMax-M3.1-Flash-Preview",
+    "model_name": "MiniMax-M3.1-Flash",
     "reasoning_effort": "low",
     "group_id": ""
   },
