@@ -110,12 +110,17 @@ logger.info("=" * 60)
 logger.info("检查 LLM 配置...")
 config_path = BASE_DIR / 'config.json'
 if config_path.exists():
-    with open(config_path, 'r', encoding='utf-8') as f:
-        config = json.load(f)
+    from modules.llm_client import load_effective_config
+    try:
+        config = load_effective_config(str(config_path))
+    except Exception as e:
+        logger.warning(f"加载生效配置失败，仅显示 config.json: {e}")
+        with open(config_path, 'r', encoding='utf-8') as f:
+            config = json.load(f)
     api_config = config.get('api', {})
-    logger.info(f"config.json 中的 base_url: {api_config.get('base_url', '未设置')}")
-    logger.info(f"config.json 中的 model_name: {api_config.get('model_name', '未设置')}")
-    logger.info(f"config.json 中的 api_key 存在: {bool(api_config.get('api_key'))}")
+    logger.info(f"base_url: {api_config.get('base_url', '未设置')}")
+    logger.info(f"model_name: {api_config.get('model_name', '未设置')}")
+    logger.info(f"api_key 已配置: {bool(api_config.get('api_key'))}")
 logger.info("=" * 60)
 
 # 翻译提示词模板 - 英译中
@@ -776,7 +781,7 @@ def uap_create():
 def update_user_settings():
     """用户修改个人设置（邮箱和密码）"""
     try:
-        user_id = int(request.headers.get('X-User-ID'))
+        user_id = g.current_user['id']
         data = request.json
 
         if not data:
@@ -884,7 +889,7 @@ def extract_summary(blocks: list, translations: dict = None, max_chars: int = 50
 def change_password():
     """修改密码"""
     try:
-        user_id = int(request.headers.get('X-User-ID'))
+        user_id = g.current_user['id']
         data = request.json
         old_password = data.get('old_password', '')
         new_password = data.get('new_password', '')
@@ -920,7 +925,7 @@ def get_pending_users():
 def get_all_users():
     """获取所有用户列表"""
     try:
-        admin_id = int(request.headers.get('X-User-ID'))
+        admin_id = g.current_user['id']
         users = user_db.get_all_users(admin_id)
         return jsonify({'success': True, 'users': users})
     except Exception as e:
@@ -933,7 +938,7 @@ def get_all_users():
 def approve_user(user_id):
     """审批通过用户"""
     try:
-        admin_id = int(request.headers.get('X-User-ID'))
+        admin_id = g.current_user['id']
         data = request.json or {}
         reason = data.get('reason', '')
 
@@ -949,7 +954,7 @@ def approve_user(user_id):
 def reject_user(user_id):
     """拒绝用户"""
     try:
-        admin_id = int(request.headers.get('X-User-ID'))
+        admin_id = g.current_user['id']
         data = request.json or {}
         reason = data.get('reason', '')
 
@@ -965,7 +970,7 @@ def reject_user(user_id):
 def disable_user(user_id):
     """禁用用户"""
     try:
-        admin_id = int(request.headers.get('X-User-ID'))
+        admin_id = g.current_user['id']
         data = request.json or {}
         reason = data.get('reason', '')
 
@@ -981,7 +986,7 @@ def disable_user(user_id):
 def reset_user_password(user_id):
     """重置用户密码"""
     try:
-        admin_id = int(request.headers.get('X-User-ID'))
+        admin_id = g.current_user['id']
         data = request.json
         new_password = data.get('new_password', '')
 
@@ -1000,7 +1005,7 @@ def reset_user_password(user_id):
 def update_user(user_id):
     """编辑用户信息"""
     try:
-        admin_id = int(request.headers.get('X-User-ID'))
+        admin_id = g.current_user['id']
         data = request.json
 
         email = data.get('email', '').strip()
@@ -1027,7 +1032,7 @@ def update_user(user_id):
 def enable_user(user_id):
     """启用用户"""
     try:
-        admin_id = int(request.headers.get('X-User-ID'))
+        admin_id = g.current_user['id']
         result = user_db.enable_user(user_id, admin_id)
         return jsonify(result)
     except Exception as e:
@@ -1887,9 +1892,8 @@ def update_memory(memory_id):
     """更新翻译记忆"""
     try:
         # 检查权限（只允许admin和manager编辑）
-        user_id = request.headers.get('X-User-ID')
-        user = user_db.get_user_by_id(int(user_id))
-        if not user or user['role'] not in ['admin', 'manager']:
+        user = g.current_user
+        if user['role'] not in ['admin', 'manager']:
             return jsonify({'success': False, 'error': '权限不足'}), 403
         
         data = request.json
@@ -1925,9 +1929,8 @@ def delete_memory(memory_id):
     """删除翻译记忆"""
     try:
         # 检查权限（只允许admin和manager删除）
-        user_id = request.headers.get('X-User-ID')
-        user = user_db.get_user_by_id(int(user_id))
-        if not user or user['role'] not in ['admin', 'manager']:
+        user = g.current_user
+        if user['role'] not in ['admin', 'manager']:
             return jsonify({'success': False, 'error': '权限不足'}), 403
         
         import sqlite3
@@ -2610,7 +2613,7 @@ def download_file(filename):
 def get_translation_history():
     """获取翻译历史列表，支持模糊搜索和用户筛选 - 所有用户可查看所有历史"""
     try:
-        user_id = int(request.headers.get('X-User-ID', 0))
+        user_id = g.current_user['id']
         user = user_db.get_user_by_id(user_id)
 
         # 获取查询参数
@@ -2650,7 +2653,7 @@ def get_translation_history():
 def get_translation_record(record_id):
     """获取单条翻译记录详情"""
     try:
-        user_id = int(request.headers.get('X-User-ID', 0))
+        user_id = g.current_user['id']
         user = user_db.get_user_by_id(user_id)
 
         record = user_db.get_translation_record(record_id)
@@ -2679,7 +2682,7 @@ def get_translation_record(record_id):
 def delete_translation_record(record_id):
     """删除翻译记录"""
     try:
-        user_id = int(request.headers.get('X-User-ID', 0))
+        user_id = g.current_user['id']
         user = user_db.get_user_by_id(user_id)
 
         # 获取记录信息

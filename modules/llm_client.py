@@ -5,8 +5,47 @@ LLM客户端模块
 """
 
 import os
+import json
 from typing import Dict, Optional, Generator
 from abc import ABC, abstractmethod
+
+
+def load_effective_config(config_path: str = "config.json") -> Dict:
+    """加载生效配置。
+
+    密钥不入库：仓库内 config.json 的 api_key 恒为空，真实密钥放在同目录
+    config.local.json（git 忽略），或 MINIMAX_API_KEY 环境变量。
+    优先级：config.local.json > 环境变量 > config.json。
+    """
+    if not os.path.exists(config_path):
+        # 尝试在项目根目录查找
+        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        config_path = os.path.join(base_dir, config_path)
+
+    if not os.path.exists(config_path):
+        raise FileNotFoundError(f"配置文件不存在: {config_path}")
+
+    with open(config_path, 'r', encoding='utf-8') as f:
+        config = json.load(f)
+
+    # 同目录 config.local.json（git 忽略）覆盖非空字段
+    local_cfg_path = os.path.join(os.path.dirname(config_path), 'config.local.json')
+    if os.path.exists(local_cfg_path):
+        with open(local_cfg_path, 'r', encoding='utf-8') as f:
+            local_cfg = json.load(f)
+        for section, values in local_cfg.items():
+            if isinstance(values, dict) and isinstance(config.get(section), dict):
+                config[section].update({k: v for k, v in values.items() if v})
+            elif values not in (None, ''):
+                config[section] = values
+
+    # 环境变量兜底（MINIMAX_API_KEY）
+    if not config.get('api', {}).get('api_key'):
+        env_key = os.environ.get('MINIMAX_API_KEY', '')
+        if env_key:
+            config.setdefault('api', {})['api_key'] = env_key
+
+    return config
 
 
 class BaseLLMClient(ABC):
@@ -239,47 +278,16 @@ class APILLMClient(BaseLLMClient):
 
 class LLMClient:
     """统一的LLM客户端，自动从配置文件加载"""
-    
+
     def __init__(self, config_path: str = "config.json"):
         """
         初始化LLM客户端
-        
+
         Args:
             config_path: 配置文件路径
         """
-        import json
-        import os
-        
-        # 查找配置文件
-        if not os.path.exists(config_path):
-            # 尝试在项目根目录查找
-            base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-            config_path = os.path.join(base_dir, config_path)
-        
-        if not os.path.exists(config_path):
-            raise FileNotFoundError(f"配置文件不存在: {config_path}")
-        
-        # 加载配置
-        with open(config_path, 'r', encoding='utf-8') as f:
-            config = json.load(f)
+        config = load_effective_config(config_path)
 
-        # 密钥不入库：同目录 config.local.json（git 忽略）覆盖非空字段
-        local_cfg_path = os.path.join(os.path.dirname(config_path), 'config.local.json')
-        if os.path.exists(local_cfg_path):
-            with open(local_cfg_path, 'r', encoding='utf-8') as f:
-                local_cfg = json.load(f)
-            for section, values in local_cfg.items():
-                if isinstance(values, dict) and isinstance(config.get(section), dict):
-                    config[section].update({k: v for k, v in values.items() if v})
-                elif values not in (None, ''):
-                    config[section] = values
-
-        # 环境变量兜底（MINIMAX_API_KEY）
-        if not config.get('api', {}).get('api_key'):
-            env_key = os.environ.get('MINIMAX_API_KEY', '')
-            if env_key:
-                config.setdefault('api', {})['api_key'] = env_key
-        
         llm_config = config.get("llm", {})
         api_config = config.get("api", {})  # 读取API配置
         llm_type = llm_config.get("type", "api")
